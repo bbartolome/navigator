@@ -281,7 +281,7 @@ question 6.
 | 14 | valid `settle` for the last question | `scout_phase="done"`; the next `navigator_ask` returns `error` |
 | 15 | re-`settle` `q1` after a `challenge` | the `q1` entry is replaced, `settled_answers` length unchanged |
 | 16 | prefix test (main doc §9a) across a tool round in `settling` | request bytes through the summary are identical before and after the appended tool results |
-| 17 | rendering with 2 settled answers and 1 pending | golden SESSION SUMMARY; `settled_answers` precedes `current_question_id` |
+| 17 | rendering with 2 settled answers and 1 pending | golden SESSION SUMMARY (`tests/golden/g4_scout_two_settled.txt`); SETTLED ANSWERS come before OPEN QUESTIONS. Phase 2 has no current-question line for scout, so the order is checked on those two sections |
 | 18 | `claude plugin validate .` on a tree containing `skills/scout/SKILL.md` | passes |
 
 ## 9. Done criteria
