@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Wait for one navigator job's result file and print its Outcome (phase 3b section 7). Standard library only.
+
+Usage: navigator-wait <result_path>
+
+Exit codes: 0 completed (stdout is the Outcome), 3 cancelled, 4 failed, 5 server exited before a result,
+2 bad arguments or unknown job.
+"""
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _print(obj: dict) -> None:
+    print(json.dumps(obj), flush=True)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        _print({"status": "error", "reason": "usage: navigator-wait <result_path>"})
+        return 2
+    result = Path(argv[1])
+    pending = result.with_name(result.name.replace(".result.json", ".pending.json"))
+    if not result.exists() and not pending.exists():
+        _print({"status": "error", "reason": "unknown job"})
+        return 2
+    while True:
+        if result.exists():
+            data = json.loads(result.read_text())
+            state = data.get("state")
+            if state == "completed":
+                _print(data["outcome"])
+                return 0
+            if state == "cancelled":
+                _print({"status": "error", "reason": "cancelled"})
+                return 3
+            _print({"status": "error", "reason": data.get("failure") or "failed"})
+            return 4
+        if pending.exists():
+            try:
+                pid = int(json.loads(pending.read_text())["server_pid"])
+            except (ValueError, KeyError, OSError):
+                pid = None
+            if pid is not None and not _alive(pid):
+                _print({"status": "error", "reason": "server exited"})
+                return 5
+        elif not result.exists():
+            _print({"status": "error", "reason": "unknown job"})
+            return 2
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

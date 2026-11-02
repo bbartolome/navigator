@@ -7,10 +7,12 @@ ask_n, and a fourth bounced call ends the ask.
 import base64
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol
 
+import anyio
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,6 +25,7 @@ ROUND_CAP = 12  # sends per ask (section 4)
 BOUNCE_CAP = 3  # bounced calls allowed per ask; the next one ends the ask (decided 2026-11-02)
 CONTEXT_LINES = 5  # retry trim: lines kept either side of an excerpt's range (section 6)
 CARRY_FORWARD_MAX = 5
+BACKOFF = (1, 2, 4, 8, 16, 30)  # seconds between 503 retries; 30 repeats (phase 3b section 6)
 MONOTONIC = ("ask_n", "rounds")  # never restored after a failed send: audit file names derive from them
 
 
@@ -32,6 +35,14 @@ class TransportFailure(Exception):
 
 class ImageError(Exception):
     """An image is missing, unreadable or over the size limit. Raised before any state change."""
+
+
+class DeadlineExceeded(Exception):
+    """The job deadline passed before a send. The loop returns Error(timeout) without sending."""
+
+
+class Busy503(Exception):
+    """Ollama still answered 503 after the retry cap (phase 3b section 6)."""
 
 
 def canonical_json(obj: Any) -> bytes:
@@ -77,6 +88,7 @@ class Answered(BaseModel):
 class Error(BaseModel):
     status: Literal["error"]
     reason: str
+    stage: str | None = None  # the job stage when a timeout or busy error happened (phase 3b section 1)
 
 
 Outcome = Annotated[ToolCalls | NeedInfo | Answered | Error, Field(discriminator="status")]
@@ -124,9 +136,7 @@ class OllamaClient:
 
     def __init__(self, base_url: str, model: str, *, transport: httpx.AsyncBaseTransport | None = None):
         self.model = model
-        self._http = httpx.AsyncClient(
-            base_url=base_url, timeout=httpx.Timeout(None), transport=transport
-        )
+        self._http = httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(None), transport=transport)
 
     @property
     def timeout(self) -> httpx.Timeout:
@@ -136,8 +146,11 @@ class OllamaClient:
         msgs = [_redact(m) for m in messages] if redact_images else messages
         return canonical_json({"messages": msgs, "model": self.model, "stream": False, "tools": tools})
 
-    async def post(self, body: bytes) -> httpx.Response:
-        return await self._http.post("/api/chat", content=body, headers={"Content-Type": "application/json"})
+    async def post(self, body: bytes, timeout: httpx.Timeout | None = None) -> httpx.Response:
+        kwargs = {} if timeout is None else {"timeout": timeout}
+        return await self._http.post(
+            "/api/chat", content=body, headers={"Content-Type": "application/json"}, **kwargs
+        )
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -145,8 +158,14 @@ class OllamaClient:
 
 @dataclass
 class Runtime:
+    """What the loop needs: the client and mode, plus the job hooks (phase 3b section 1). Defaults mean no job."""
+
     client: OllamaClient
     mode: Mode
+    on_stage: Callable[[str], None] = lambda stage: None
+    deadline_remaining: Callable[[], float | None] = lambda: None
+    sleep: Callable[[float], Awaitable[None]] = anyio.sleep
+    max_503_retries: int = 8
 
 
 def _placeholder(b64: str) -> str:
@@ -325,12 +344,28 @@ async def _post(state: S.SessionState, rt: Runtime, body: bytes, redacted: bytes
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{stem}.json").write_bytes(redacted)  # written before the send
     reply_stem = "reply" + stem[len("request") :]
-    try:
-        resp = await rt.client.post(body)
-    except httpx.HTTPError as exc:
-        reason = f"{type(exc).__name__}: {exc}"
-        (directory / f"{reply_stem}-error.txt").write_text(reason)
-        raise TransportFailure(reason) from exc
+    attempt = 0
+    while True:
+        remaining = rt.deadline_remaining()
+        if remaining is not None and remaining <= 0:
+            raise DeadlineExceeded()
+        timeout = None if remaining is None else httpx.Timeout(remaining)
+        try:
+            resp = await rt.client.post(body, timeout=timeout)
+        except httpx.HTTPError as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            (directory / f"{reply_stem}-error.txt").write_text(reason)
+            raise TransportFailure(reason) from exc
+        if resp.status_code == 503:
+            if attempt >= rt.max_503_retries:
+                raise Busy503(f"ollama busy (503): {resp.text[:500]}")
+            delay = BACKOFF[min(attempt, len(BACKOFF) - 1)]
+            if remaining is not None:
+                delay = min(delay, remaining)
+            attempt += 1
+            await rt.sleep(delay)
+            continue
+        break
     if resp.status_code // 100 != 2:
         reason = f"HTTP {resp.status_code}: {resp.text[:500]}"
         (directory / f"{reply_stem}-error.txt").write_text(reason)
@@ -355,15 +390,27 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
     tool_names = {t["function"]["name"] for t in tools}
     empties: list[tuple[int, int | None]] = []  # (request bytes, prompt_eval_count) for each empty reply
     retry: int | None = None
+    continuations = 0  # bounce and resend continuations in this loop, for the "bounce/resend k" stage
+    label_continuation = False
+    current_stage = ""
 
     while True:
         if state.rounds >= ROUND_CAP:
             return _settle(state, _err("round limit"))
         state.rounds += 1
+        stem = _stem(state, retry)
+        current_stage = f"bounce/resend {continuations}" if label_continuation else f"waiting on navigator ({stem})"
+        label_continuation = False
+        retry = None
+        rt.on_stage(current_stage)
         body = rt.client.build_request(state.messages, tools)
         redacted = rt.client.build_request(state.messages, tools, redact_images=True)
-        obj, metrics = await _post(state, rt, body, redacted, _stem(state, retry))
-        retry = None
+        try:
+            obj, metrics = await _post(state, rt, body, redacted, stem)
+        except DeadlineExceeded:
+            return _settle(state, Error(status="error", reason="timeout", stage=current_stage))
+        except Busy503 as exc:
+            return _settle(state, Error(status="error", reason=str(exc), stage=current_stage))
         reply = classify(obj, tool_names)
 
         if reply.kind == "malformed":
@@ -372,6 +419,7 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
                 state.messages.append(
                     {"role": "user", "content": f"Your reply was malformed: {reply.reason}. Call a tool with valid arguments."}
                 )
+                continuations, label_continuation = continuations + 1, True
                 continue
             return _settle(state, _err(f"malformed reply twice: {reply.reason}"))
 
@@ -382,6 +430,7 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
                 state.messages.append(
                     {"role": "user", "content": f"Call {answer_tool} with that answer; don't reply in text."}
                 )
+                continuations, label_continuation = continuations + 1, True
                 continue
             return _settle(state, _err("plain-text reply twice"))
 
@@ -430,6 +479,7 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
                 state.messages.append({"role": "tool", "tool_name": c.name, "content": text})
             if state.bounces > BOUNCE_CAP:
                 return _settle(state, _err("repeated bounces"))
+            continuations, label_continuation = continuations + 1, True
             continue
 
         ni = [c for c in reply.calls if c.name == "need_info"]
@@ -488,6 +538,7 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
         if not survivors:
             for p in pending:
                 state.messages.append({"role": "tool", "tool_name": p.name, "content": p.bounce})
+            continuations, label_continuation = continuations + 1, True
             continue
         state.pending = pending
         return _settle(

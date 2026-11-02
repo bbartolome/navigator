@@ -1,19 +1,29 @@
-import os
-from collections.abc import Awaitable, Callable
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
+import anyio
 from mcp.server import MCPServer
 
+from . import jobs as J
 from . import ollama, session
 from .render import render_summary
 
-mcp = MCPServer("navigator")
+jobs = J.JobManager.from_env()
 
-# Modes are registered by phases 4 and 5. Until then navigator_ask reports the mode as unavailable.
-_MODES: dict[str, ollama.Mode] = {}
 
-# Phase 3 has no job queue yet (phase 3b). This guard stops two asks on one session in the same process.
-_busy: set[str] = set()
+@asynccontextmanager
+async def lifespan(app: MCPServer) -> AsyncIterator[dict[str, Any]]:
+    """Startup recovery, then one worker for the life of the process (phase 3b section 2.5)."""
+    jobs.recover()
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(jobs.worker)
+        yield {"jobs": jobs}
+        tg.cancel_scope.cancel()
+
+
+mcp = MCPServer("navigator", extensions=[J.TasksExtension(jobs)], lifespan=lifespan)
 
 
 def _load(session_id: str) -> session.SessionState:
@@ -21,36 +31,6 @@ def _load(session_id: str) -> session.SessionState:
         return session.load_state(session_id)
     except session.SessionNotFound:
         raise ValueError(f"unknown session_id: {session_id}") from None
-
-
-def _client() -> ollama.OllamaClient:
-    return ollama.OllamaClient(
-        os.environ.get("NAVIGATOR_OLLAMA_URL", "http://host.docker.internal:11434"),
-        os.environ.get("NAVIGATOR_MODEL", "qwen-agent:latest"),
-    )
-
-
-async def _drive(
-    session_id: str, run: Callable[[session.SessionState, ollama.Runtime], Awaitable[ollama.Outcome]]
-) -> dict[str, Any]:
-    with session.session_lock(session_id):
-        state = _load(session_id)
-        if session_id in _busy:
-            return ollama.Error(status="error", reason="busy").model_dump(mode="json")
-        mode = _MODES.get(state.mode)
-        if mode is None:
-            reason = f"no mode registered for {state.mode!r} yet"
-            return ollama.Error(status="error", reason=reason).model_dump(mode="json")
-        _busy.add(session_id)
-    client = _client()
-    try:
-        outcome = await run(state, ollama.Runtime(client=client, mode=mode))
-        return outcome.model_dump(mode="json")
-    finally:
-        await client.aclose()
-        with session.session_lock(session_id):
-            session.save_state(state)
-        _busy.discard(session_id)
 
 
 @mcp.tool()
@@ -75,6 +55,7 @@ def navigator_status(session_id: str) -> str:
 @mcp.tool()
 def navigator_record(session_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Record a verdict, decision, clarification, step or challenge on the session."""
+    jobs.check_no_active_job(session_id)
     with session.session_lock(session_id):
         state = _load(session_id)
         session.apply_record(state, kind, payload)
@@ -85,31 +66,43 @@ def navigator_record(session_id: str, kind: str, payload: dict[str, Any]) -> dic
 @mcp.tool()
 def navigator_end(session_id: str) -> dict[str, Any]:
     """Mark the session finished. Its files stay on disk."""
+    jobs.check_no_active_job(session_id)
     with session.session_lock(session_id):
         state = _load(session_id)
         state.ended = True
         session.save_state(state)
-        return {"ok": True}
+    jobs.drop_session(session_id)
+    return {"ok": True}
 
 
 @mcp.tool()
-async def navigator_ask(
+def navigator_ask(
     session_id: str,
     question: str,
     answer_tool: str,
     excerpts: list[ollama.Excerpt] | None = None,
     images: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Ask the navigator one question. Returns an Outcome: tool_calls, need_info, answered or error."""
+    """Ask the navigator one question. Returns the queued reply; the Outcome arrives as the job result."""
     args = ollama.AskArgs(question=question, answer_tool=answer_tool, excerpts=excerpts or [], images=images or [])
-    return await _drive(session_id, lambda st, rt: ollama.ask(st, args, rt))
+    return jobs.enqueue_queued(session_id, "ask", args)
 
 
 @mcp.tool()
-async def navigator_submit(session_id: str, results: list[ollama.Result]) -> dict[str, Any]:
-    """Send the results of the navigator's tool calls. Returns the next Outcome."""
+def navigator_submit(session_id: str, results: list[ollama.Result]) -> dict[str, Any]:
+    """Send the results of the navigator's tool calls. Returns the queued reply; the Outcome arrives as the job result."""
     args = ollama.SubmitArgs(results=results)
-    return await _drive(session_id, lambda st, rt: ollama.submit(st, args, rt))
+    return jobs.enqueue_queued(session_id, "submit", args)
+
+
+@mcp.tool()
+async def navigator_cancel(job_id: str) -> dict[str, Any]:
+    """Cancel a queued or running job. Returns the job's state after the cancel."""
+    try:
+        state = await jobs.cancel(job_id)
+    except KeyError:
+        state = "unknown"
+    return {"job_id": job_id, "state": state}
 
 
 def _counts(state: session.SessionState) -> dict[str, int]:
@@ -117,4 +110,7 @@ def _counts(state: session.SessionState) -> dict[str, int]:
 
 
 def main() -> None:
+    argv = sys.argv[1:]
+    if "--job-timeout" in argv:  # the CLI flag wins over NAVIGATOR_JOB_TIMEOUT (phase 3b section 8)
+        jobs.configure(float(argv[argv.index("--job-timeout") + 1]))
     mcp.run()  # transport defaults to "stdio"
