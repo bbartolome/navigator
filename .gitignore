@@ -1,2 +1,5 @@
 # Per-user Claude Code settings (shared settings.json is committed)
 .claude/settings.local.json
+server/.venv/
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,16 @@
+[project]
+name = "navigator-mcp"
+version = "0.1.0"
+description = "Navigator MCP server"
+requires-python = ">=3.11"
+dependencies = ["mcp>=2.3.0"]
+
+[project.scripts]
+navigator-mcp = "navigator_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest>=8"]
