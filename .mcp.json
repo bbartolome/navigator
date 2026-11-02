@@ -2,7 +2,10 @@
   "mcpServers": {
     "navigator": {
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh",
-      "args": []
+      "args": [],
+      "env": {
+        "NAVIGATOR_UV_VERSION": "0.13.6"
+      }
     }
   }
 }

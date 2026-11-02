@@ -22,3 +22,9 @@ def test_mcp_json_launches_the_server_through_the_launcher():
     assert entry["command"] == "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh"
     assert entry["args"] == []
     assert "timeout" not in entry  # main doc §9b: Claude Code's default applies
+
+
+def test_mcp_json_pins_the_uv_version_the_launcher_installs():
+    mcp = json.loads((REPO / ".mcp.json").read_text())
+    env = mcp["mcpServers"]["navigator"]["env"]
+    assert env["NAVIGATOR_UV_VERSION"] == "0.13.6"  # matches the uv_build pin in server/pyproject.toml
