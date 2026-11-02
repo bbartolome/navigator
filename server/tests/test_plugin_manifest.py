@@ -17,7 +17,7 @@ def test_plugin_manifest_names_the_plugin():
 
 
 def test_mcp_json_launches_the_server_through_the_launcher():
-    mcp = json.loads((REPO / ".mcp.json").read_text())
+    mcp = json.loads((REPO / "mcp" / "navigator.json").read_text())
     entry = mcp["mcpServers"]["navigator"]
     assert entry["command"] == "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh"
     assert entry["args"] == []
@@ -25,6 +25,21 @@ def test_mcp_json_launches_the_server_through_the_launcher():
 
 
 def test_mcp_json_pins_the_uv_version_the_launcher_installs():
-    mcp = json.loads((REPO / ".mcp.json").read_text())
+    mcp = json.loads((REPO / "mcp" / "navigator.json").read_text())
     env = mcp["mcpServers"]["navigator"]["env"]
     assert env["NAVIGATOR_UV_VERSION"] == "0.13.6"  # matches the uv_build pin in server/pyproject.toml
+
+
+def test_plugin_manifest_points_at_the_server_config():
+    manifest = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
+    assert manifest["mcpServers"] == "./mcp/navigator.json"
+
+
+def test_no_project_mcp_json_at_the_repo_root():
+    # A root .mcp.json is also read as a project server, which duplicates the plugin's server.
+    assert not (REPO / ".mcp.json").exists()
+
+
+def test_launcher_defaults_the_uv_version_so_the_pin_is_not_required():
+    launcher = (REPO / "scripts" / "launch.sh").read_text()
+    assert "NAVIGATOR_UV_VERSION:-0.13.6" in launcher

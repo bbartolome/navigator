@@ -6,7 +6,7 @@ log(){ echo "[navigator] $*" >&2; }
 if [ ! -x "$V/bin/navigator-mcp" ] || ! cmp -s "$R/server/pyproject.toml" "$STAMP"; then
   UV="$(command -v uv || true)"
   if [ -z "$UV" ] && [ ! -x "$D/uv-bin/uv" ]; then
-    curl -LsSf "https://astral.sh/uv/${NAVIGATOR_UV_VERSION:?pin required}/install.sh" \
+    curl -LsSf "https://astral.sh/uv/${NAVIGATOR_UV_VERSION:-0.13.6}/install.sh" \
       | UV_UNMANAGED_INSTALL="$D/uv-bin" sh >&2 || log "uv install failed; falling back to venv"
   fi
   [ -z "$UV" ] && [ -x "$D/uv-bin/uv" ] && UV="$D/uv-bin/uv"

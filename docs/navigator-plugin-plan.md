@@ -229,7 +229,8 @@ The plugin root is the repo root, next to the existing tracked `.claude/skills/`
 
 ```
 .claude-plugin/plugin.json      # { "name": "navigator", ... }
-.mcp.json                       # server "navigator": command ${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh
+mcp/navigator.json              # server "navigator", referenced by plugin.json; moved from the root 2026-11-02 (see phase 1)
+                                #   a root .mcp.json is also read as a project server and duplicates the plugin's server
 scripts/launch.sh               # bootstraps the Python env in ${CLAUDE_PLUGIN_DATA}, then execs navigator-mcp
 bin/navigator-wait              # waits for a job's result file and prints the Outcome (§9b)
 skills/pair/SKILL.md            # replaces to-llm

@@ -21,7 +21,7 @@ server/src/navigator_mcp/server.py
 ### `.claude-plugin/plugin.json`
 
 Fields per [plugins-reference](https://code.claude.com/docs/en/plugins-reference) (Fields table): `name` required,
-`version`/`description`/`author` optional (validator warns when they are missing). `.mcp.json` at the plugin root is
+`version`/`description`/`author` optional (validator warns when they are missing). Decided 2026-11-02: the server config lives at `mcp/navigator.json`, and `plugin.json` sets `"mcpServers": "./mcp/navigator.json"`. A root `.mcp.json` is also read as a project server, which duplicated the plugin's server. `.mcp.json` at the plugin root is
 loaded by default, so no `mcpServers` key is set.
 
 ```json

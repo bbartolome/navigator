@@ -2,5 +2,8 @@
   "name": "navigator",
   "version": "0.1.0",
   "description": "Pairs Claude with a local Ollama navigator model through an MCP server.",
-  "author": { "name": "Ben B" }
+  "author": {
+    "name": "Ben B"
+  },
+  "mcpServers": "./mcp/navigator.json"
 }
