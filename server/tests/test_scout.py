@@ -286,3 +286,27 @@ async def test_agree_questions_is_refused_once_the_list_is_frozen():
     out = await ask(st, _ask("agree_questions"), runtime(fake, SCOUT))
     assert isinstance(out, Error)
     assert fake.requests == []
+
+
+# Justification form in scout mode (phase 7 Q3): a tool parameter on every exploration tool, as in pair mode
+
+
+async def test_19_scout_request_offers_justification_as_a_required_tool_parameter():
+    fake = FakeOllama([_agree_reply()])
+    await ask(_start(), _ask("agree_questions"), runtime(fake, SCOUT))
+    tools = json.loads(fake.requests[0])["tools"]
+    by_name = {t["function"]["name"]: t["function"]["parameters"] for t in tools}
+    for name in ["read_file", "list_dir", "grep", "screenshot", "web_search"]:
+        assert "justification" in by_name[name]["properties"], name
+        assert "justification" in by_name[name]["required"], name
+    assert "justification" not in by_name["need_info"]["properties"]  # need_info takes questions, not a justification
+    assert "justification" not in by_name["agree_questions"]["properties"]  # answer tools carry no justification
+
+
+async def test_20_scout_exploration_call_without_justification_is_bounced():
+    st = _start()
+    await _agreed(st)
+    fake = FakeOllama([call("read_file", path="a.py"), _settle("q1")])
+    out = await ask(st, _ask("settle"), runtime(fake, SCOUT))
+    assert isinstance(out, Answered)
+    assert "justification is required" in _tool_text(fake.requests[1])

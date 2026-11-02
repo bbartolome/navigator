@@ -109,7 +109,7 @@ Phase 4 copies the pair charter into `modes/pair.py` (§2); phase 5 does the sco
 | Explore alternatives, strongest case for and against each; incomplete decision gets challenged | charter in `modes/scout.py`; K `scout` |
 | Prefer simplest backwards-compatible option; justify complexity | charter in `modes/scout.py`; K `scout` |
 | Tools enabled on every turn | S (§9a fixed `tools`) |
-| Each tool-call reply carries a justification per call | S bounce (§5); form (param vs content) see Q3 |
+| Each tool-call reply carries a justification per call | S bounce (§5); tool parameter in both modes (Q3, resolved) |
 | Rolling summary instead of chat history, one deliverable per request | S `render.py`; `answer_tool` per ask |
 | Full context behind each fact, not gists | S state fields; C supplies via `context`/`excerpts` |
 | Past actions as one-line results; repeat call must say what is new | S action log + bounce (§5, §6) |
@@ -184,7 +184,7 @@ synced plugin is to turn it off on claude.ai.
 - §11: Should `keep_alive` be sent? It breaks the "exactly four keys" parity row if yes.
 - Q1: Does `source: "./"` (plugin at marketplace root) pass `claude plugin validate` and install?
 - Q2: Who captures screenshots (Playwright, viewport reduction to stay under about 1 MB)? §5 assigns only viewing.
-- Q3: Is `justification` a tool parameter (to-llm) or reply `content` (scout-ahead) in scout mode?
+- Q3: Is `justification` a tool parameter (to-llm) or reply `content` (scout-ahead) in scout mode? Resolved 2026-11-02: a tool parameter in both modes. The navigator tools in `schemas.py` are shared, each exploration tool requires it, and a call without it is bounced (`tests/test_scout.py` tests 19-20). The scout answer tools take no justification.
 - Q5: Where in claude.ai are the backing plugins turned off, and do `plugin_0114eQ...` / `plugin_01RjoX...` back any
   other skill?
 
