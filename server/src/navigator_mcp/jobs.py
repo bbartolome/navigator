@@ -154,6 +154,12 @@ class JobManager:
         return next((j for j in self._jobs.values() if j.state in ("queued", "running")), None)
 
     def enqueue(self, session_id: str, kind: str, args: Any) -> Job:
+        # Under the session lock, so a navigator_record that has just passed its active-job check cannot save over
+        # the state this job starts from.
+        with S.session_lock(session_id):
+            return self._enqueue_locked(session_id, kind, args)
+
+    def _enqueue_locked(self, session_id: str, kind: str, args: Any) -> Job:
         active = self.active()  # the active-slot check runs before any session check (section 2.3)
         if active is not None:
             raise ActiveJobError(active.job_id)
@@ -391,10 +397,17 @@ class JobManager:
                 del self._jobs[job.job_id]
                 _result_path(job.job_id).unlink(missing_ok=True)
 
+    def session_job(self, session_id: str) -> Job | None:
+        """The queued or running job of one session, if any (navigator_status shows it)."""
+        return next(
+            (j for j in self._jobs.values() if j.session_id == session_id and j.state in ("queued", "running")),
+            None,
+        )
+
     def check_no_active_job(self, session_id: str) -> None:
         active = self.active()
         if active is not None and active.session_id == session_id:
-            raise ValueError(f"job {active.job_id} active")
+            raise ValueError(f"job {active.job_id} is still running for this session; wait for its result, then record")
 
     # Task object (section 4)
 

@@ -27,7 +27,15 @@ Handle each returned `Outcome`:
   - `screenshot`: capture headless with Playwright (`chromium.launch()`) to a path under the session's working directory, as `shot-K.png`. Open it with Read first. If it shows a secret, submit `denied` and do not attach it. Otherwise submit `ran` with `image_path`. If the file is over about 1 MB, lower the viewport and capture again.
   - `web_search`: run with WebSearch in standard mode. If the query carries code, secrets, private paths or hostnames, or aims at a non-public site, do not run it. Report it to the user and ask through AskUserQuestion. Run it only if approved.
 - `need_info`: it is not an answer. Answer its questions yourself with evidence, then call `navigator_ask` again with the same question.
-- `answered`: check each `carry_forward` line and each claim against the source. Record verdicts with `navigator_record` (`carry_forward_verdict`, `rejected_claim` with the evidence, `decided`, `step_done`, `clarification`, `challenge`). Then report the outcome to the user in one line.
+- `answered`: check each `carry_forward` line and each claim against the source. Record the results with `navigator_record`, with exactly these payload keys:
+  - `decided {text, rationale?} | {scope:"question_list"}`
+  - `rejected_claim {claim, evidence}`
+  - `clarification {question, answer}`
+  - `step_done {step_id}`
+  - `challenge {text|null}`
+  - `carry_forward_verdict {line, verdict: kept|wrong, evidence (required for wrong)}`
+
+  After each commit, record `step_done` with the `set_plan` step id. Quote a line from the latest outcome's `carry_forward` exactly, one `carry_forward_verdict` call per line, before the next `navigator_ask`. On a record error, read the message, which names the fix, and retry once. If a record says a job is still running, wait for its result, then record. Then report the outcome to the user in one line.
 - `error`: if the reason is a malformed or empty reply, the server has already resent once; report the reason and ask the user through AskUserQuestion.
 
 Use AskUserQuestion for anything that needs the user's approval, and when a challenge goes back and forth without the navigator moving.

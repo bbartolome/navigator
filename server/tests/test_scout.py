@@ -279,6 +279,13 @@ def test_skill_frontmatter_matches_the_phase_doc():
     assert "allowed-tools: mcp__plugin_navigator_navigator__*" in text
 
 
+# Fix plan section 6: the skill quotes the exact payload key lines that the server accepts and describes.
+def test_scout_skill_quotes_each_record_kinds_keys():
+    text = SKILL.read_text()
+    for line in S.RECORD_CONTRACT.values():
+        assert line in text, line
+
+
 async def test_agree_questions_is_refused_once_the_list_is_frozen():
     st = _start()
     await _agreed(st)

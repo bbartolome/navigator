@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import anyio
 import pytest
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
 
 from fakes import FakeClock, FakeOllama, Status, StubMode, call, decide, empty
@@ -630,3 +631,36 @@ async def test_session_restore_uses_the_job_start_snapshot():
         assert job.snapshot.phase == "IDLE"
         fake.release()
         await job.settled.wait()
+
+
+# docs/fix-navigator-record.md sections 2, 4 and 6: a record during a job is refused with text the driver can act on,
+# and status shows the job.
+async def test_record_during_a_running_job_is_a_readable_tool_error(monkeypatch):
+    fake = FakeOllama([decide(decision="x", carry_forward=[])])
+    fake.hold()
+    jobs = manager(fake, FakeClock())
+    monkeypatch.setattr(srv, "jobs", jobs)
+    sid = new_session()
+    job = jobs.enqueue(sid, "ask", ask_args())
+    async with workers(jobs):
+        await until(lambda: job.state == "running" and fake.requests)
+        with pytest.raises(ToolError) as info:
+            srv.navigator_record(sid, "decided", {"text": "x"})
+        assert f"job {job.job_id} is still running for this session" in str(info.value)
+        assert "wait for its result, then record" in str(info.value)
+        fake.release()
+        await job.settled.wait()
+
+
+async def test_status_shows_the_queued_job_of_the_session(monkeypatch):
+    jobs = manager(FakeOllama([]), FakeClock())
+    monkeypatch.setattr(srv, "jobs", jobs)
+    sid = new_session()
+    job = jobs.enqueue(sid, "ask", ask_args())  # no worker: the job stays queued
+    status = srv.navigator_status(sid)
+    assert f"JOB: {job.job_id} queued queued (position 1)" in status.splitlines()
+
+
+async def test_status_has_no_job_line_when_the_session_has_no_job(monkeypatch):
+    monkeypatch.setattr(srv, "jobs", manager(FakeOllama([]), FakeClock()))
+    assert "JOB:" not in srv.navigator_status(new_session())

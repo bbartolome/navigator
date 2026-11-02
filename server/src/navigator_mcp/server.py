@@ -1,10 +1,12 @@
 import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Literal
 
 import anyio
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import ValidationError
 
 import json
 
@@ -36,6 +38,31 @@ def _load(session_id: str) -> session.SessionState:
         raise ValueError(f"unknown session_id: {session_id}") from None
 
 
+# The SDK replaces any exception other than ToolError with "Error executing tool <name>", so the driver would see no
+# reason. These tools re-raise the failures it can act on as ToolError, whose text reaches the client
+# (docs/fix-navigator-record.md section 1).
+RECORD_DESCRIPTION = (
+    "Record a verdict, decision, clarification, step or challenge on the session. Payload keys by kind; an unknown or "
+    "missing key is refused and the error lists the allowed keys:\n" + "\n".join(session.RECORD_CONTRACT.values())
+)
+
+
+def _tool_error(exc: Exception) -> ToolError:
+    if isinstance(exc, ValidationError):
+        return ToolError(session.describe_record_error(exc))
+    if isinstance(exc, session.SessionNotFound):
+        return ToolError(f"unknown session_id: {exc}")
+    return ToolError(str(exc))
+
+
+@contextmanager
+def _readable_errors() -> Iterator[None]:
+    try:
+        yield
+    except (ValueError, session.SessionNotFound, session.SessionCorrupt) as exc:  # ValidationError is a ValueError
+        raise _tool_error(exc) from exc
+
+
 @mcp.tool()
 def navigator_start(mode: Literal["pair", "scout"], goal: str, context: str) -> str:
     """Start a navigator session and return its session_id."""
@@ -44,24 +71,29 @@ def navigator_start(mode: Literal["pair", "scout"], goal: str, context: str) -> 
 
 @mcp.tool()
 def navigator_status(session_id: str) -> str:
-    """Return the rendered SESSION SUMMARY and the session's Ollama metrics."""
-    with session.session_lock(session_id):
-        state = _load(session_id)
+    """Return the rendered SESSION SUMMARY, the session's Ollama metrics and its current job, if any."""
+    with _readable_errors():
+        with session.session_lock(session_id):
+            state = _load(session_id)
+        job = jobs.session_job(session_id)
     m = state.metrics
     metrics = (
         f"METRICS: sends={m.sends} prompt_eval_count={m.prompt_eval_count}"
         f" prompt_eval_cached_count={m.prompt_eval_cached_count} prompt_eval_duration={m.prompt_eval_duration}"
     )
+    job_line = f"\nJOB: {job.job_id} {job.state} {job.stage}" if job is not None else ""
     summary = render_summary(state, compress.make_transform())
-    return summary + "\n" + metrics + "\nCOMPRESSION: " + json.dumps(compress.status(), sort_keys=True)
+    return summary + "\n" + metrics + job_line + "\nCOMPRESSION: " + json.dumps(compress.status(), sort_keys=True)
 
 
-@mcp.tool()
-def navigator_record(session_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+@mcp.tool(description=RECORD_DESCRIPTION)
+def navigator_record(session_id: str, kind: session.RecordKind, payload: dict[str, Any]) -> dict[str, Any]:
     """Record a verdict, decision, clarification, step or challenge on the session."""
-    jobs.check_no_active_job(session_id)
-    with session.session_lock(session_id):
+    with _readable_errors(), session.session_lock(session_id):
+        jobs.check_no_active_job(session_id)  # inside the lock: no job can start between this check and the save
         state = _load(session_id)
+        if state.ended:
+            raise ValueError("session ended")
         session.apply_record(state, kind, payload)
         session.save_state(state)
         return {"ok": True, "counts": _counts(state)}
@@ -70,11 +102,12 @@ def navigator_record(session_id: str, kind: str, payload: dict[str, Any]) -> dic
 @mcp.tool()
 def navigator_end(session_id: str) -> dict[str, Any]:
     """Mark the session finished. Its files stay on disk."""
-    jobs.check_no_active_job(session_id)
-    with session.session_lock(session_id):
-        state = _load(session_id)
-        state.ended = True
-        session.save_state(state)
+    with _readable_errors():
+        with session.session_lock(session_id):
+            jobs.check_no_active_job(session_id)
+            state = _load(session_id)
+            state.ended = True
+            session.save_state(state)
     jobs.drop_session(session_id)
     return {"ok": True}
 

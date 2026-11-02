@@ -4,6 +4,7 @@
 """
 
 import json
+import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -12,8 +13,15 @@ REPO = Path(__file__).resolve().parents[2]
 def test_plugin_manifest_names_the_plugin():
     manifest = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
     assert manifest["name"] == "navigator"
-    assert manifest["version"] == "0.1.0"
+    assert manifest["version"] == "0.1.1"
     assert manifest["author"] == {"name": "Ben B"}
+
+
+def test_server_package_version_matches_the_plugin_version():
+    # scripts/launch.sh reinstalls the server only when pyproject.toml changes, so a rebuild needs this bump.
+    manifest = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
+    pyproject = tomllib.loads((REPO / "server" / "pyproject.toml").read_text())
+    assert pyproject["project"]["version"] == manifest["version"]
 
 
 def test_mcp_json_launches_the_server_through_the_launcher():

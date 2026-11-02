@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from navigator_mcp import session as S
+
 ENTRY = Path(sys.executable).with_name("navigator-mcp")
 
 INITIALIZE = {
@@ -121,6 +123,87 @@ def test_unknown_session_id_is_a_tool_error():
         srv.send(INITIALIZED)
         reply = srv.request(_call(2, "navigator_status", {"session_id": "nope"}))
         assert reply["result"]["isError"] is True
+
+
+# Fix plan section 6: the client sees the readable text, not "Error executing tool navigator_record".
+
+
+def _initialized(srv: _Server) -> None:
+    srv.request(INITIALIZE)
+    srv.send(INITIALIZED)
+
+
+def test_record_schema_lists_the_six_kinds_and_every_kinds_keys():
+    with _Server() as srv:
+        _initialized(srv)
+        tools = {t["name"]: t for t in srv.request(LIST_TOOLS)["result"]["tools"]}
+        record = tools["navigator_record"]
+        assert set(_enum_values(record["inputSchema"]["properties"]["kind"])) == set(S.RECORD_CONTRACT)
+        for line in S.RECORD_CONTRACT.values():
+            assert line in record["description"], line
+
+
+def test_bad_step_done_over_stdio_returns_the_readable_error():
+    with _Server() as srv:
+        _initialized(srv)
+        session_id = _text(srv.request(_call(2, "navigator_start", {"mode": "pair", "goal": "g", "context": ""})))
+        reply = srv.request(
+            _call(3, "navigator_record", {"session_id": session_id, "kind": "step_done", "payload": {"id": "1"}})
+        )
+        assert reply["result"]["isError"] is True
+        text = _text(reply)
+        assert "unknown key 'id'" in text
+        assert "missing 'step_id'" in text
+        assert "Allowed keys for step_done: step_id" in text
+
+
+def test_unknown_kind_over_stdio_lists_the_kinds():
+    with _Server() as srv:
+        _initialized(srv)
+        session_id = _text(srv.request(_call(2, "navigator_start", {"mode": "pair", "goal": "g", "context": ""})))
+        reply = srv.request(_call(3, "navigator_record", {"session_id": session_id, "kind": "bogus", "payload": {}}))
+        assert reply["result"]["isError"] is True
+        for kind in S.RECORD_CONTRACT:
+            assert kind in _text(reply), kind
+
+
+def test_unknown_step_id_and_carry_forward_line_over_stdio_list_the_valid_choices():
+    session_id = S.create_session("pair", "g", "").session_id  # the state dir is shared with the server process
+    state = S.load_state(session_id)
+    S.set_plan(
+        state,
+        [{"id": "E1", "change": "a", "verification": "v"}, {"id": "E2", "change": "b", "verification": "v"}],
+        ["keep me"],
+    )
+    S.save_state(state)
+    with _Server() as srv:
+        _initialized(srv)
+        step = srv.request(
+            _call(2, "navigator_record", {"session_id": session_id, "kind": "step_done", "payload": {"step_id": "E9"}})
+        )
+        assert step["result"]["isError"] is True
+        assert "valid step ids: E1, E2" in _text(step)
+        verdict = srv.request(
+            _call(
+                3,
+                "navigator_record",
+                {
+                    "session_id": session_id,
+                    "kind": "carry_forward_verdict",
+                    "payload": {"line": "zzz", "verdict": "kept"},
+                },
+            )
+        )
+        assert verdict["result"]["isError"] is True
+        assert "1. keep me" in _text(verdict)
+
+
+def test_unknown_session_over_stdio_names_the_session():
+    with _Server() as srv:
+        _initialized(srv)
+        reply = srv.request(_call(2, "navigator_status", {"session_id": "0" * 32}))
+        assert reply["result"]["isError"] is True
+        assert "unknown session_id: " + "0" * 32 in _text(reply)
 
 
 def _enum_values(schema: dict) -> list[str]:

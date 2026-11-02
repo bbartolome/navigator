@@ -1,6 +1,6 @@
 # Fix plan: navigator_record failures
 
-Status: planned, not implemented. Scope: `server/src/navigator_mcp/{server,session,jobs}.py`, `skills/pair/SKILL.md`,
+Status: implemented in plugin 0.1.1 (sections 2-6). Section 8 checked over stdio against the installed copy. Scope: `server/src/navigator_mcp/{server,session,jobs}.py`, `skills/pair/SKILL.md`,
 `skills/scout/SKILL.md`, and tests.
 
 ## 1. Problem and evidence

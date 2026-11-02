@@ -8,9 +8,9 @@ import re
 import threading
 import uuid
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 Mode = Literal["pair", "scout"]
 CallStatus = Literal["ran", "denied", "bounced"]
@@ -318,6 +318,63 @@ Record = Annotated[
 ]
 _record = TypeAdapter(Record)
 
+RecordKind = Literal["decided", "rejected_claim", "clarification", "step_done", "challenge", "carry_forward_verdict"]
+
+# The payload keys of each kind, one line each (docs/fix-navigator-record.md section 3). The navigator_record
+# description and the pair and scout skills quote these lines; the tests check that they name every field of the
+# matching Rec model.
+RECORD_CONTRACT: dict[str, str] = {
+    "decided": 'decided {text, rationale?} | {scope:"question_list"}',
+    "rejected_claim": "rejected_claim {claim, evidence}",
+    "clarification": "clarification {question, answer}",
+    "step_done": "step_done {step_id}",
+    "challenge": "challenge {text|null}",
+    "carry_forward_verdict": "carry_forward_verdict {line, verdict: kept|wrong, evidence (required for wrong)}",
+}
+
+RECORD_MODELS: dict[str, type[_M]] = {
+    "decided": DecidedRec,
+    "rejected_claim": RejectedRec,
+    "clarification": ClarifRec,
+    "step_done": StepDoneRec,
+    "challenge": ChallengeRec,
+    "carry_forward_verdict": VerdictRec,
+}
+
+
+def describe_record_error(exc: ValidationError) -> str:
+    """One readable line: each problem, then the allowed keys of the kind it was for (fix doc section 2)."""
+    kind: str | None = None
+    problems: list[str] = []
+    for err in exc.errors():
+        loc = err["loc"]  # a discriminated union reports ("<kind>", "<field>"), or () for an unknown kind
+        if loc and loc[0] in RECORD_MODELS:
+            kind = loc[0]
+        field = loc[-1] if len(loc) > 1 else None
+        if err["type"] == "union_tag_invalid":
+            problems.append(f"unknown kind {err['ctx']['tag']!r}; kinds: {', '.join(RECORD_CONTRACT)}")
+        elif err["type"] == "extra_forbidden":
+            problems.append(f"unknown key {field!r}")
+        elif err["type"] == "missing":
+            problems.append(f"missing {field!r}")
+        elif err["type"] == "literal_error":
+            choices = ", ".join(str(v) for v in get_args(RECORD_MODELS[kind].model_fields[field].annotation))
+            problems.append(f"{field} must be one of: {choices}")
+        else:
+            problems.append(f"{field}: {err['msg']}")
+    message = "; ".join(problems)
+    if kind is None:
+        return message
+    keys = [name for name in RECORD_MODELS[kind].model_fields if name != "kind"]
+    return f"{kind}: {message}. Allowed keys for {kind}: {', '.join(keys)}"
+
+
+def _missing_carry_forward_line(state: SessionState, line: str) -> str:
+    if not state.carry_forward:
+        return f"line is not in carry_forward: {line}; carry_forward is empty"
+    numbered = "\n".join(f"{i}. {current}" for i, current in enumerate(state.carry_forward, 1))
+    return f"line is not in carry_forward: {line}\ncurrent carry_forward lines:\n{numbered}"
+
 
 def apply_record(state: SessionState, kind: str, payload: dict[str, Any]) -> SessionState:
     """Validate and apply one navigator_record. Validation and checks run before any mutation."""
@@ -337,8 +394,10 @@ def apply_record(state: SessionState, kind: str, payload: dict[str, Any]) -> Ses
     elif isinstance(rec, ClarifRec):
         state.clarifications.append(Clarification(question=rec.question, answer=rec.answer))
     elif isinstance(rec, StepDoneRec):
-        if rec.step_id not in [st.id for st in state.steps]:
-            raise ValueError(f"unknown step_id: {rec.step_id}")
+        known = [st.id for st in state.steps]
+        if rec.step_id not in known:
+            where = f"valid step ids: {', '.join(known)}" if known else "no plan yet (no set_plan answer)"
+            raise ValueError(f"unknown step_id: {rec.step_id}; {where}")
         if rec.step_id not in state.done:
             state.done.append(rec.step_id)
         state.current_step = next((st.id for st in state.steps if st.id not in state.done), None)
@@ -346,7 +405,7 @@ def apply_record(state: SessionState, kind: str, payload: dict[str, Any]) -> Ses
         state.open_challenge = rec.text or None
     elif isinstance(rec, VerdictRec):
         if rec.line not in state.carry_forward:
-            raise ValueError(f"line is not in carry_forward: {rec.line}")
+            raise ValueError(_missing_carry_forward_line(state, rec.line))
         if rec.verdict == "wrong":
             if not rec.evidence.strip():
                 raise ValueError("a wrong verdict needs evidence")

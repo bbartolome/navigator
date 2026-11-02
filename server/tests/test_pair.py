@@ -196,6 +196,13 @@ def test_19_skill_frontmatter_and_body():
     assert "curl" not in outside
 
 
+# Fix plan section 6: the skill quotes the exact payload key lines that the server accepts and describes.
+def test_pair_skill_quotes_each_record_kinds_keys():
+    _, body = _frontmatter()
+    for line in S.RECORD_CONTRACT.values():
+        assert line in body, line
+
+
 # 20 plugin validation
 @pytest.mark.skipif(shutil.which("claude") is None, reason="claude CLI not on PATH")
 def test_20_claude_plugin_validate_passes():

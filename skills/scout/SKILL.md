@@ -14,7 +14,7 @@ call `navigator_status` in a loop.
 - A `{"status":"queued", ..., "wait_command"}` reply: run `wait_command` once with Bash and
   `run_in_background: true`, then act on the `Outcome` JSON it prints. Exit 3 means cancelled, 4 failed, 5 server
   exited.
-- Only one job runs per server; on a `job <id> active` error, wait for that job's result.
+- Only one job runs per server; on a `job <id> active` error, wait for that job's result. A record that says a job is still running: wait for its result, then record.
 
 1. Build the context. For each closed ticket of the grilling session, read its resolution comment in full, not the
    map's one-line gist. Put each ticket id and its full comment in the `context` argument. Call
@@ -24,6 +24,15 @@ call `navigator_status` in a loop.
    settle, `answer_tool="agree_questions"`. Check each proposed question against the tickets. If one is wrong,
    missing or redundant, record a `challenge` with the evidence, then ask again. Do not change the list yourself.
    When you accept the list, call `navigator_record` with `kind="decided"` and `payload={"scope":"question_list"}`.
+   Every `navigator_record` payload takes exactly these keys:
+   - `decided {text, rationale?} | {scope:"question_list"}`
+   - `rejected_claim {claim, evidence}`
+   - `clarification {question, answer}`
+   - `step_done {step_id}`
+   - `challenge {text|null}`
+   - `carry_forward_verdict {line, verdict: kept|wrong, evidence (required for wrong)}`
+
+   On a record error, read the message, which names the fix, and retry once.
 
 3. Settle one question per `navigator_ask`, `answer_tool="settle"`, in list order. Give the question and the
    excerpts it needs. Offer options without a preference.
@@ -44,8 +53,9 @@ call `navigator_status` in a loop.
    - the decision is not the simplest backwards-compatible option and no `complexity_justification` explains why.
    Send a challenge in its own turn: record it with `navigator_record(kind="challenge")`, then ask again with
    `settle`. Check each carry-forward line against the source and record the verdict with
-   `navigator_record(kind="carry_forward_verdict")`; record wrong claims as `rejected_claim` with evidence. If a
-   challenge goes back and forth without the navigator moving, ask the user through AskUserQuestion.
+   `navigator_record(kind="carry_forward_verdict")`; record wrong claims as `rejected_claim` with evidence. A challenge
+   payload is `{text}` only; the question is the current one. If a challenge goes back and forth without the navigator
+   moving, ask the user through AskUserQuestion.
 
 7. Report each `answered` outcome to the user in one line.
 
