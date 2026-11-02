@@ -1,8 +1,9 @@
-"""Mode registry. Phase 4 registers pair and phase 5 registers scout."""
+"""Mode registry: pair (phase 4). Scout registers here in phase 5."""
 
 from ..ollama import Mode
+from .pair import PAIR
 
-MODES: dict[str, Mode] = {}
+MODES: dict[str, Mode] = {"pair": PAIR}
 
 
 def get(name: str) -> Mode | None:

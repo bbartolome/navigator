@@ -1,6 +1,6 @@
 """Phase 3b test 35: raw JSON-RPC over stdio, as the main doc section 2 probe does.
 
-The server runs as a subprocess with the stub mode (stub_server.py). Ollama is a real HTTP server on localhost that
+The server runs as a subprocess (the navigator-mcp entry point, pair mode). Ollama is a real HTTP server on localhost that
 answers every /api/chat call with a decide tool call. The opted-in navigator_ask returns a task; tasks/get polls it
 to completion. Without the opt-in, navigator_ask returns the queued reply at once (section 7 and test 14).
 """
@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-TESTS = Path(__file__).resolve().parent
 META = {
     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
     "io.modelcontextprotocol/clientInfo": {"name": "stdio-test", "version": "0"},
@@ -54,7 +53,7 @@ class _Ollama(BaseHTTPRequestHandler):
 class _Client:
     def __init__(self, env: dict):
         self.proc = subprocess.Popen(
-            [sys.executable, str(TESTS / "stub_server.py")],
+            [str(Path(sys.executable).with_name("navigator-mcp"))],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
         )
         self._next = 0

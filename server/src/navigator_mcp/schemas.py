@@ -61,3 +61,56 @@ NAVIGATOR_TOOLS: list[dict] = [
         _object({"questions": {"type": "array", "items": _STR, "description": "each saying what it settles"}}, ["questions"]),
     ),
 ]
+
+
+def _answer_tool(name: str, parameters: dict) -> dict:
+    return _tool(name, name, parameters)  # answer tools take no justification, so the description is the name
+
+
+SET_PLAN_TOOL = _answer_tool(
+    "set_plan",
+    _object(
+        {
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["id", "files", "change", "verification"],
+                    "properties": {
+                        "id": _STR,
+                        "files": {"type": "array", "items": _STR},
+                        "change": _STR,
+                        "verification": _STR,
+                    },
+                },
+            },
+            "carry_forward": {"type": "array", "maxItems": 5, "items": _STR},
+        },
+        ["steps", "carry_forward"],
+    ),
+)
+
+DECIDE_TOOL = _answer_tool(
+    "decide",
+    _object(
+        {
+            "decision": _STR,
+            "findings": {
+                "type": "array",
+                "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "required": ["severity", "cite", "issue", "fix"],
+                    "properties": {
+                        "severity": {"type": "string", "enum": ["S1", "S2", "S3"]},
+                        "cite": {"type": "string", "description": "path:line"},
+                        "issue": _STR,
+                        "fix": _STR,
+                    },
+                },
+            },
+            "carry_forward": {"type": "array", "maxItems": 5, "items": _STR},
+        },
+        ["decision", "carry_forward"],
+    ),
+)
