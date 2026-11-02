@@ -112,7 +112,6 @@ class SessionState(_M):
     # counters (all start at 1)
     next_call_seq: int = 1
     next_shot_k: int = 1
-    next_request_n: int = 1
     ended: bool = False
 ```
 
@@ -125,7 +124,6 @@ Every mutator validates its inputs before changing state; on error it raises `Va
 | Function | Effect |
 | --- | --- |
 | `alloc_call_id(s) -> str` | returns `f"call-{s.next_call_seq:04d}"`, increments counter |
-| `alloc_request_n(s) -> int` | returns `next_request_n`, increments |
 | `log_action(s, entry)` | append to `action_log` |
 | `add_file_read(s, FileRead)` | append unless an equal record exists |
 | `add_web_search(s, WebSearch)` | append unless an equal record exists |

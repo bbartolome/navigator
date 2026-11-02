@@ -3,7 +3,10 @@ name = "navigator-mcp"
 version = "0.1.0"
 description = "Navigator MCP server"
 requires-python = ">=3.11"
-dependencies = ["mcp>=2.3.0"]
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp>=2.3.0",
+]
 
 [project.scripts]
 navigator-mcp = "navigator_mcp.server:main"

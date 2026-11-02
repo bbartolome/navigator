@@ -144,7 +144,7 @@ Maximum rounds per ask: 12 sends, counting bounces, resends and tool rounds. Exc
 
 ## 5. call_id and bounce rules
 
-- `call_id = f"c{k}"`, `k` a per-session counter starting at 1, incremented per call in reply order, never reset across asks. Bounced calls consume an id. No random or time-derived component (§9a).
+- `call_id = "call-{k:04d}"` (from phase 2 `alloc_call_id`), `k` a per-session counter starting at 1, incremented per call in reply order, never reset across asks. Bounced calls consume an id. No random or time-derived component (§9a). Decided 2026-11-02: the `call-NNNN` format wins over `c{k}`.
 - Ollama has no call id (§2). The id exists only between server and Claude. In the Ollama messages a result is matched by `tool_name` and message order.
 - `Outcome.calls[i]` = `{call_id, name, args (arguments minus "justification"), justification}`.
 
@@ -154,7 +154,7 @@ Bounce rules, evaluated per exploration call in order:
 2. **Exact repeat.** The call has the same `name` and the same `args` (compared as `canonical_json` of `arguments` with `justification` removed) as an earlier call in this session's action log, and its `justification` does not differ in a way the server can check. The server cannot judge "what changed", so the rule is: the repeat is bounced unless its justification string, normalized by `strip().lower()`, differs from every earlier justification for that call. Bounce text: `"{name} with these arguments already ran as {earlier_call_id}; its result is above. Call again only if the justification names what changed, or answer."`
 3. Order: rule 1 before rule 2. A bounced call is logged in the action log as `"{name} bounced: {rule}"`.
 
-A bounce is delivered as `{"role":"tool","tool_name":name,"content":<text>}`. Per ask, after 3 bounces the loop returns `error` ("repeated bounces"). Claude sees nothing for a bounce unless the loop ends.
+A bounce is delivered as `{"role":"tool","tool_name":name,"content":<text>}`. Per ask, three bounced calls are allowed; a fourth bounce returns `error` ("repeated bounces"). Decided 2026-11-02. Claude sees nothing for a bounce unless the loop ends.
 
 ## 6. Malformed, empty, plain-text replies
 
@@ -215,12 +215,12 @@ Helper bodies: `call(name, **args)` = `{"message":{"role":"assistant","content":
 | 1 | request shape | one `ask`, reply `decide(...)` | recorded body parses to keys exactly `{messages,model,stream,tools}`; `stream` is `false`; `messages[0]` is `{role:"system",content:"CHARTER"}`; `tools[-1].function.name == "decide"`; body bytes equal `canonical_json(parsed)` |
 | 2 | timeout | construct client with no job deadline | `client.timeout == httpx.Timeout(None)` |
 | 3 | answered | reply `decide(decision="x", carry_forward=["a"])` | `Answered(tool="decide", result={...}, carry_forward=["a"])`; state `IDLE` |
-| 4 | tool round | reply `read_file(path=..., justification="j")`, then `submit` result `ran`, reply `decide` | first outcome `ToolCalls` with `call_id == "c1"`, `args` without `justification`, state `AWAITING_SUBMIT`; second request `messages` has, after the first request's messages, an assistant message with the exact `tool_calls` and `{role:"tool",tool_name:"read_file",content:...}` |
-| 5 | call ids | two calls in one reply, then another in the next round | `c1`, `c2`, then `c3` |
+| 4 | tool round | reply `read_file(path=..., justification="j")`, then `submit` result `ran`, reply `decide` | first outcome `ToolCalls` with `call_id == "call-0001"`, `args` without `justification`, state `AWAITING_SUBMIT`; second request `messages` has, after the first request's messages, an assistant message with the exact `tool_calls` and `{role:"tool",tool_name:"read_file",content:...}` |
+| 5 | call ids | two calls in one reply, then another in the next round | `call-0001`, `call-0002`, then `call-0003` |
 | 6 | submit mismatch | submit missing `c2` | `Error`; state still `AWAITING_SUBMIT`; no request sent |
 | 7 | denied | `status:"denied"`, content `"outside repo"` | tool message content `"DENIED: outside repo"` |
 | 8 | no justification | `read_file` without it, then `decide` | no `ToolCalls` outcome; second request ends with assistant message plus tool message containing `"justification is required"`; final `Answered`; one id consumed |
-| 9 | exact repeat | round 1 `read_file(a)`, submit, round 2 `read_file(a)` with identical justification, then `decide` | round 2 is bounced (tool message contains `"already ran as c1"`); `Answered` returned with no second `ToolCalls` |
+| 9 | exact repeat | round 1 `read_file(a)`, submit, round 2 `read_file(a)` with identical justification, then `decide` | round 2 is bounced (tool message contains `"already ran as call-0001"`); `Answered` returned with no second `ToolCalls` |
 | 10 | repeat with new justification | same, justification text differs | second call surfaces as `ToolCalls` `c2` |
 | 11 | bounce cap | four consecutive bounced replies | `Error("repeated bounces")` |
 | 12 | malformed | `arguments` is the string `"{}"`, then valid `decide` | second request ends with the malformed user message; `Answered`. With two malformed replies: `Error` |

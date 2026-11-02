@@ -84,7 +84,8 @@ def test_jsonrpc_over_stdio_lists_tools_and_starts_and_reads_a_session():
         assert init["result"]["serverInfo"]["name"] == "navigator"
 
         tools = {t["name"]: t for t in srv.request(LIST_TOOLS)["result"]["tools"]}
-        assert {"navigator_start", "navigator_status", "navigator_record", "navigator_end"} <= set(tools)
+        expected = {"navigator_start", "navigator_status", "navigator_record", "navigator_end", "navigator_ask", "navigator_submit"}
+        assert expected <= set(tools)
         mode_schema = tools["navigator_start"]["inputSchema"]["properties"]["mode"]
         assert set(_enum_values(mode_schema)) == {"pair", "scout"}
 

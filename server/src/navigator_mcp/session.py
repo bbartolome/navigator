@@ -77,6 +77,29 @@ class ActionLogEntry(_M):
     args_summary: str  # single line
     status: CallStatus
     result_summary: str  # single line
+    # phase 3 bounce rule 2: canonical JSON of the args without justification, and the justification as given
+    args_key: str = ""
+    justification: str = ""
+
+
+class PendingCall(_M):
+    """One exploration call of the last reply. bounce is set when the server bounced it (phase 3 section 5)."""
+
+    call_id: str
+    name: str
+    args: dict[str, Any]
+    args_key: str
+    justification: str
+    bounce: str | None = None
+
+
+class MetricsTotals(_M):
+    """Sums of the per-reply Ollama metrics for one session (phase 3 section 3; None values are skipped)."""
+
+    sends: int = 0
+    prompt_eval_count: int = 0
+    prompt_eval_cached_count: int = 0
+    prompt_eval_duration: int = 0
 
 
 class Alternative(_M):
@@ -127,8 +150,18 @@ class SessionState(_M):
     # counters (all start at 1)
     next_call_seq: int = 1
     next_shot_k: int = 1
-    next_request_n: int = 1
     ended: bool = False
+    # loop state (phase 3 section 4); the append-only summary above is not affected by these
+    phase: Literal["IDLE", "THINKING", "AWAITING_SUBMIT"] = "IDLE"
+    ask_n: int = 0  # request-N numbering; incremented per ask
+    rounds: int = 0  # sends made in the current ask
+    bounces: int = 0
+    resent: bool = False
+    retried: bool = False
+    pending: list[PendingCall] | None = None
+    messages: list[dict[str, Any]] = []  # the current ask's Ollama messages, append-only within the ask
+    ask_parts: dict[str, Any] | None = None  # summary, excerpts, question and answer tool, for the empty-reply retry
+    metrics: MetricsTotals = Field(default_factory=MetricsTotals)
 
 
 # Mutators. Each validates before changing state and raises ValueError on error (phase 2 section 1).
@@ -138,12 +171,6 @@ def alloc_call_id(s: SessionState) -> str:
     call_id = f"call-{s.next_call_seq:04d}"
     s.next_call_seq += 1
     return call_id
-
-
-def alloc_request_n(s: SessionState) -> int:
-    n = s.next_request_n
-    s.next_request_n += 1
-    return n
 
 
 def log_action(s: SessionState, entry: ActionLogEntry) -> None:
