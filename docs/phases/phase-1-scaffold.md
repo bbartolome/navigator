@@ -40,16 +40,57 @@ Entry format: top-level `mcpServers` map; an entry with no `type` is read as std
 and §8. No `timeout` is set, so Claude Code's default applies (main doc §9b). To set a job deadline, add
 `"env": {"NAVIGATOR_JOB_TIMEOUT": "<seconds>"}`, or append `"--job-timeout", "<seconds>"` to `args`.
 
+The command is a launcher script, so the plugin doesn't depend on `uv` or `pip` being installed (main doc §2, "Python
+runtime for the plugin").
+
 ```json
 {
   "mcpServers": {
     "navigator": {
-      "command": "uv",
-      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}/server", "navigator-mcp"]
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh",
+      "args": []
     }
   }
 }
 ```
+
+### `scripts/launch.sh`
+
+`CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` are exported to stdio MCP server processes (main doc §2). stdout carries
+the MCP protocol, so every installer line goes to stderr. Untested sketch:
+
+```bash
+#!/usr/bin/env bash
+set -eu
+D="${CLAUDE_PLUGIN_DATA:?}"; R="${CLAUDE_PLUGIN_ROOT:?}"
+V="$D/venv"; STAMP="$D/pyproject.stamp"
+log(){ echo "[navigator] $*" >&2; }
+if [ ! -x "$V/bin/navigator-mcp" ] || ! cmp -s "$R/server/pyproject.toml" "$STAMP"; then
+  UV="$(command -v uv || true)"
+  if [ -z "$UV" ] && [ ! -x "$D/uv-bin/uv" ]; then
+    curl -LsSf "https://astral.sh/uv/${NAVIGATOR_UV_VERSION:?pin required}/install.sh" \
+      | UV_UNMANAGED_INSTALL="$D/uv-bin" sh >&2 || log "uv install failed; falling back to venv"
+  fi
+  [ -z "$UV" ] && [ -x "$D/uv-bin/uv" ] && UV="$D/uv-bin/uv"
+  rm -rf "$V"
+  if [ -n "$UV" ]; then
+    "$UV" venv "$V" >&2 && "$UV" pip install --python "$V/bin/python" "$R/server" >&2
+  else
+    python3 -c 'import sys;sys.exit(sys.version_info<(3,10))' || { log "need Python >= 3.10"; exit 1; }
+    python3 -m venv "$V" >&2 2>&1 || { rm -rf "$V"; python3 -m venv --without-pip "$V" >&2
+      curl -sSf https://bootstrap.pypa.io/get-pip.py | "$V/bin/python" >&2; }
+    "$V/bin/python" -m pip install "$R/server" >&2
+  fi
+  cp "$R/server/pyproject.toml" "$STAMP"
+fi
+exec "$V/bin/navigator-mcp" "$@"
+```
+
+- Fallback order: an existing `uv`; a pinned uv in `${CLAUDE_PLUGIN_DATA}/uv-bin`; a venv, with a `--without-pip` +
+  get-pip fallback when `ensurepip` is missing.
+- Reinstalls only when `server/pyproject.toml` changes. Later starts are offline.
+- llmlingua/torch are not installed here (phase 6 adds an explicit step).
+- `NAVIGATOR_UV_VERSION` is a placeholder for the pin. The value is chosen when implementing (open questions below).
 
 ### `server/pyproject.toml`
 
@@ -166,7 +207,13 @@ claude --plugin-dir .                     # then run /mcp in the session
 ## Open questions
 
 Phase-affecting questions from §11:
-- Is `uv` available wherever the plugin runs? (Smoke test 4 depends on it; `.mcp.json` `command` is `uv`.)
+- Launcher: which uv version to pin, and how to verify the installer download? The uv installer docs show a
+  version-pinned URL but no checksum step.
+- Does a first-run install fit within Claude Code's MCP server startup timeout (`MCP_TIMEOUT`)? If not, add an
+  optional SessionStart warm-up hook. The docs don't say whether SessionStart finishes before MCP servers start, so the
+  launcher must work without it.
+- Development commands below still use `uv` directly in `server/`. That needs `uv` on the developer's machine, not
+  the user's.
 - Do MCP tool calls prompt for permission after the skill's invoking turn? (Observe during smoke test 4 by calling a
   tool from the session with no allow rule; the allow rule `mcp__plugin_navigator_navigator__*` is only added if it
   prompts.)

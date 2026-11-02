@@ -190,9 +190,13 @@ allowed-tools: mcp__plugin_navigator_navigator__*
 You are the driver. The navigator is a local model reached only through the `navigator_*` MCP tools. Never curl
 Ollama and never decide a question yourself. Route every question through `navigator_ask`.
 
-Waiting for results (main doc §9b): `navigator_ask` and `navigator_submit` run as queued jobs. Their `Outcome` arrives
-as a task result or notification, or as the tool result itself. Don't poll, and don't call `navigator_status` in a
-loop. Only one job runs per server; on a `job <id> active` error, wait for that job's result.
+Waiting for results (main doc §9b): `navigator_ask` and `navigator_submit` run as queued jobs. Don't poll, and don't
+call `navigator_status` in a loop.
+- A background-task reply: wait for the task notification. Its result is the `Outcome`.
+- A `{"status":"queued", ..., "wait_command"}` reply: run `wait_command` once with Bash and
+  `run_in_background: true`, then act on the `Outcome` JSON it prints. Exit 3 means cancelled, 4 failed, 5 server
+  exited.
+- Only one job runs per server; on a `job <id> active` error, wait for that job's result.
 
 1. Build the context. For each closed ticket of the grilling session, read its resolution comment in full, not the
    map's one-line gist. Put each ticket id and its full comment in the `context` argument. Call

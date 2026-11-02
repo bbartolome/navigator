@@ -162,7 +162,12 @@ Rules:
 - Attach evidence as `excerpts` of `{path,start,end,text}`: the ranges the question needs, with enough context to read alone, not whole files.
 - First question: give the task, the plan and code excerpts, and any plan/code mismatch, with `answer_tool="set_plan"`. Every later question uses `answer_tool="decide"`. Do not write the final "Answer by calling ..." line; the server adds it.
 
-Waiting for results (main doc §9b): `navigator_ask` and `navigator_submit` run as queued jobs. In an interactive session they come back as a background task, and the `Outcome` arrives as a task notification. Otherwise the call returns the `Outcome` itself, possibly after being moved to the background. Don't poll, and don't call `navigator_status` in a loop. Act once the `Outcome` arrives. Only one job runs per server, so a `job <id> active` error means: wait for that job's result. To stop a job, use `/tasks`, or `navigator_cancel(job_id)` on the fallback path.
+Waiting for results (main doc §9b): `navigator_ask` and `navigator_submit` run as queued jobs. Don't poll, and don't call `navigator_status` in a loop.
+- If the call comes back as a background task, wait for its task notification. The `Outcome` is its result.
+- If it returns `{"status":"queued", "job_id", "wait_command"}`, run `wait_command` once with Bash and `run_in_background: true`. When it completes, its stdout is the `Outcome` JSON. Exit code 3 means cancelled, 4 failed, and 5 the server exited.
+- Only one job runs per server, so a `job <id> active` error means: wait for that job's result.
+- To stop a job, use `/tasks` (task path) or `navigator_cancel(job_id)` (queued path).
+- In a Remote Control session, calls become tasks only if the session was started with `CLAUDE_AUTO_BACKGROUND_TASKS=1`. Without it you get the queued path, which works the same way.
 
 Handle each returned `Outcome`:
 - `tool_calls`: for each call, consider its `justification`, then run or deny it, and send all results in one `navigator_submit` (`status` "ran" or "denied", with `content`).

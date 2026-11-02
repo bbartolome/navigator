@@ -13,7 +13,7 @@ Sources checked:
 
 Decision for the cancel-in-flight requirement: **(a) `ollama.py` uses `httpx.AsyncClient`.** Phase 3 must change as follows.
 
-1. `OllamaClient.chat` becomes `async def chat(...)`. The client is `httpx.AsyncClient(base_url=..., timeout=httpx.Timeout(None), transport=transport)`. `send_loop`, the `navigator_ask` / `navigator_submit` bodies and every caller become `async`. Phase 3 §3 currently specifies a sync `httpx.Client` with `httpx.Timeout(7200.0)`.
+1. `OllamaClient.chat` becomes `async def chat(...)`. The client is `httpx.AsyncClient(base_url=..., timeout=httpx.Timeout(None), transport=transport)`. `send_loop`, the `navigator_ask` / `navigator_submit` bodies and every caller become `async`. Phase 3 §3 was written for a sync `httpx.Client`; it now points here.
 2. Default timeout is `httpx.Timeout(None)` (no timeout). `chat(..., timeout: httpx.Timeout | None = <client default>)` accepts a per-request override. httpx documents per-request `timeout=` and `timeout=None` to disable (Timeouts docs; the `timeout=None` example is at `docs/advanced/timeouts.md:19-38`). Phase 3 test 2 already asserts `Timeout(None)`.
 3. `MockTransport` with `AsyncClient`: `MockTransport` subclasses `AsyncBaseTransport` and `BaseTransport`; `handle_async_request` awaits the handler result when it is a coroutine (`httpx/_transports/mock.py:15-43`, master). The Transports docs page does not document this, so this resolves phase 3 Q5 by source only. The pinned release of httpx was not read. Phase 3 tests move to `@pytest.mark.anyio` (asyncio backend) with the same scripted-queue handler, which may be `def` or `async def`.
 4. Why not (b): `anyio.to_thread.run_sync` cannot interrupt the worker thread, and the httpx Timeouts, Transports and Async pages document no way to abort an in-flight sync request from another thread. Neither claim was verified against the anyio docs. With (a), cancellation is cancellation of the awaiting task (section 3). Whether httpx closes the connection on cancel is not documented in what was read; see Q4.
@@ -100,11 +100,11 @@ mcp = MCPServer("navigator", extensions=[TasksExtension(jobs)], lifespan=lifespa
 
 @mcp.tool()
 async def navigator_ask(session_id: str, question: str, answer_tool: str, excerpts: list[Excerpt],
-                        images: list[str] | None = None, ctx: Context = None) -> Outcome:
-    return await jobs.run_blocking("ask", {...}, ctx)       # fallback path, section 7
+                        images: list[str] | None = None, ctx: Context = None) -> Outcome | Queued:
+    return jobs.enqueue_queued("ask", {...})                # fallback path, section 7
 
 @mcp.tool()
-async def navigator_submit(session_id: str, results: list[Result], ctx: Context = None) -> Outcome: ...
+async def navigator_submit(session_id: str, results: list[Result], ctx: Context = None) -> Outcome | Queued: ...
 
 @mcp.tool()
 async def navigator_cancel(job_id: str) -> dict: ...
@@ -236,25 +236,53 @@ The three `working` strings are from main doc §9b. The terminal strings are cho
 Inside `OllamaClient.chat`, on HTTP 503 (Ollama queue full, main doc §2 "Ollama concurrency"):
 - Resend the same bytes, with no new audit file and no `stage` change.
 - Delays: 1, 2, 4, 8, 16, then 30 s repeated. No jitter. `await sleep(delay)` uses the injected `sleep`.
-- The sleep is cancellable (it is part of the cancelled scope) and clipped to the remaining deadline. With a deadline the watcher ends the job as `Error(reason="timeout", stage)`. Without a deadline, retries are unbounded until cancel (Q7).
-- Every other non-2xx and every `httpx.HTTPError` follows phase 3 §3 (`Error`, no resend).
+- The sleep is cancellable (it is part of the cancelled scope) and clipped to the remaining deadline. With a deadline the watcher ends the job as `Error(reason="timeout", stage)`.
+- Cap: at most `NAVIGATOR_503_RETRIES` resends (default 8; the schedule above takes about 2.5 minutes). When the cap is reached, the job ends as `Error(reason="ollama busy (503)", stage)`, carrying the 503 body. The body is `{"error":"server busy, please try again.  maximum pending requests exceeded"}` (main doc §2, "Ollama behaviour").
+- 499, 500, 400, 404, every other non-2xx and every `httpx.HTTPError` follow phase 3 §3 (`Error` with status and body, no resend).
+- `keep_alive` is added to the payload only when `NAVIGATOR_KEEP_ALIVE` is set (main doc §8). Unset, the payload keeps the four keys.
 
-## 7. Fallback path (no opt-in)
+## 7. Fallback path (no opt-in): `queued` + `navigator-wait`
 
-`jobs.run_blocking(kind, args, ctx)` (called by the tool bodies):
-1. `enqueue`; on `ActiveJobError` return `Outcome(status="error", reason="job <id> active")` immediately.
-2. Loop: `with anyio.move_on_after(PROGRESS_INTERVAL_S): await job.settled.wait()`; if not settled, `await ctx.report_progress(n, None, job.stage)` with `n` incrementing from 1. `PROGRESS_INTERVAL_S = 60` (below the 30-minute stdio idle window, main doc §2). A progress event is also sent on each stage change.
-3. `report_progress(progress: float, total: float | None = None, message: str | None = None)` delegates to `session.report_progress` (`mcpserver/context.py:120-128`; `mcp/server/session.py:426-434`), a no-op when the caller sent no `progressToken`.
-4. When settled: return `job.outcome` (`completed`), `Error(reason="cancelled")` (`cancelled`), or raise for `failed`. Mark fetched.
-5. `try/finally`: if the waiting handler is itself cancelled while the job is unsettled, call `jobs.cancel(job.job_id)`. The dispatcher's default `notifications/cancelled` mode cancels the handler scope (`mcp/shared/jsonrpc_dispatcher.py:86-90`).
-6. Claude Code moves the call to a background task after 2 minutes (main doc §2); nothing server-side differs. `navigator_cancel(job_id)` is how Claude cancels a backgrounded call; the `job_id` is exposed to Claude through `navigator_status` (main doc §4).
+Applies when `intercept_tool_call` finds no tasks opt-in (main doc §9b). Main doc §2 records where this happens: one-shot `-p`, the desktop app, VS Code, and Remote Control without `CLAUDE_AUTO_BACKGROUND_TASKS=1`.
+
+`jobs.enqueue_queued(kind, args)`:
+1. `enqueue`. On `ActiveJobError`, return `Outcome(status="error", reason="job <id> active")`.
+2. Return `Queued{status: "queued", job_id, result_path, wait_command}` immediately.
+   - `result_path` is absolute: `${NAVIGATOR_STATE_DIR}/jobs/<job_id>.result.json`.
+   - `wait_command = "navigator-wait " + shlex.quote(result_path)`.
+   - The path is given explicitly because `${CLAUDE_PLUGIN_DATA}` is not in the environment of Bash-tool commands ([manifest reference, Environment variables](https://code.claude.com/docs/en/plugins-reference)).
+3. At every terminal state the worker writes `result_path` atomically: a temp file in the same dir, then `os.replace`, as in phase 2's persistence.
+   - Contents: `{job_id, state: "completed"|"cancelled"|"failed", outcome, failure, server_pid}`.
+4. At enqueue the worker also writes `${NAVIGATOR_STATE_DIR}/jobs/<job_id>.pending.json` containing `{job_id, server_pid}`. It deletes the file once the result is written.
+
+`bin/navigator-wait <result_path>` (plugin `bin/`, on the Bash tool's PATH while the plugin is enabled; main doc §3):
+- A stdlib-only `#!/usr/bin/env python3` script.
+- It loops on a 1 s interval inside the process, until one of these holds:
+  - `result_path` exists.
+  - The `server_pid` named in the sibling `.pending.json` no longer exists (`os.kill(pid, 0)` raises `ProcessLookupError`).
+  - Neither file exists.
+- Claude runs it once with `run_in_background: true`. The loop is inside the command, and Claude doesn't poll.
+- Output: the `outcome` JSON on stdout, one line.
+- Exit codes:
+
+  | Code | Meaning |
+  | --- | --- |
+  | 0 | `completed` |
+  | 3 | `cancelled` (stdout `{"status":"error","reason":"cancelled"}`) |
+  | 4 | `failed` (stdout `{"status":"error","reason":<failure>}`) |
+  | 5 | server gone before a result (stdout `{"status":"error","reason":"server exited"}`) |
+  | 2 | bad arguments or unknown job |
+
+- `navigator_cancel(job_id)` cancels the job (section 5). The result file is then written with `state: "cancelled"`, so the waiting `navigator-wait` exits 3.
+- The skill text (phases 4–5) acts on the printed `Outcome` exactly as it acts on a task result.
 
 ## 8. Config, persistence, recovery
 
 - `NAVIGATOR_JOB_TIMEOUT` (seconds, float) or `--job-timeout <s>` (CLI wins when both are set): `job.deadline = clock() + timeout` at enqueue, so queue time counts. Unset: `deadline = None`, `httpx.Timeout(None)`, no watcher. No `timeout` in `.mcp.json` (phase 1; main doc §8, §9b).
 - Job file `${NAVIGATOR_STATE_DIR}/<session_id>/job-<job_id>.json`: `{job_id, kind, state, created_at, finished_at, phase_before, failure}`, written at enqueue, at `running` and at every terminal state.
 - `jobs.recover()` (lifespan, before workers): for each job file with state `queued` or `running`, set `state="failed"`, `failure="server restarted"`, and set the persisted session phase back to `phase_before` (the pre-job `IDLE` or `AWAITING_SUBMIT`, with `pending` as persisted by phase 3). In-memory jobs are not restored; a later `tasks/get` for such an id returns -32602 (main doc §9b "Persistence").
-- When a session ends (`navigator_end`), its finished jobs are dropped.
+- When a session ends (`navigator_end`), its finished jobs are dropped. Their `.result.json` files are deleted on `navigator_end`, or by `recover()` at the next start.
+- `NAVIGATOR_503_RETRIES`: integer, default 8 (section 6). `NAVIGATOR_KEEP_ALIVE`: unset by default, passed through as the `keep_alive` value when set (section 6).
 
 ## 9. Tests
 
@@ -272,7 +300,7 @@ Inside `OllamaClient.chat`, on HTTP 503 (Ollama queue full, main doc §2 "Ollama
 | 3 | queued position | enqueue with the worker not started | `stage == "queued (position 1)"`; `tasks/get` returns `status:"working"` with that message |
 | 4 | tasks path, opted in | `intercept_tool_call` with `navigator_ask` and `_meta=OPT_IN` | returns dict with exactly keys `resultType, taskId, status, statusMessage, createdAt, lastUpdatedAt, ttlMs, pollIntervalMs`; `resultType=="task"`, `status=="working"`, `ttlMs is None`, `pollIntervalMs==5000`; `call_next` not called; `jobs.get(taskId)` exists |
 | 5 | opted in via capabilities only | `_meta` without the key; `session.client_capabilities.extensions` contains the id | same as test 4 |
-| 6 | not opted in | `_meta={}` and no capability | `call_next` called once; no task dict; with `ctx.report_progress` recorded (test 14) |
+| 6 | not opted in | `_meta={}` and no capability | `call_next` called once; no task dict; the tool returns `Queued` (test 14) |
 | 7 | other tool opted in | `navigator_status` with `OPT_IN` | `call_next` called; no job created |
 | 8 | tasks/get completed | complete a job, call `_get` | keys per section 4.2 incl. `result.content[0].text` parsing to the Outcome, `isError false`, `resultType "complete"`; second `_get` raises `MCPError` code -32602 |
 | 9 | completed with error Outcome | script two empty replies | `status:"completed"`, `result.isError == true` |
@@ -280,19 +308,19 @@ Inside `OllamaClient.chat`, on HTTP 503 (Ollama queue full, main doc §2 "Ollama
 | 11 | unknown taskId | `_get`, `_cancel`, `_update` with `"nope"` | `MCPError` -32602 |
 | 12 | tasks/update | known task, `inputResponses={"k":{}}` | returns `{}`; job unchanged |
 | 13 | non-declaring client on tasks/* | `_get` with no opt-in, known task | returns the task (enforcement off by default). With enforcement on (Q2): `MCPError` -32021 with `data.requiredCapabilities.extensions` containing the id |
-| 14 | fallback progress | `run_blocking`, `FakeOllama.hold()`, `FakeClock.advance(60)` three times | `report_progress` recorded 3 heartbeats (plus stage-change events) with strictly increasing `progress` and `message` equal to the current stage; after `release()` returns the Outcome |
-| 15 | fallback interval bound | inspect `PROGRESS_INTERVAL_S` | `< 1800` |
+| 14 | fallback queued | not opted in, `FakeOllama.hold()` | the tool returns `Queued` with an absolute `result_path` and a `wait_command`; `.pending.json` exists; no result file yet |
+| 15 | result file | release the fake, then wait for the job to settle | `result_path` exists with `state="completed"` and an `outcome` equal to the task-path Outcome for the same script; `.pending.json` removed |
 | 16 | cancel queued | enqueue with worker stopped; `tasks/cancel` | `{}` ack; state `cancelled`; session equals pre-job state; no request sent to `FakeOllama`; worker started afterwards skips it |
 | 17 | cancel running | `hold()`, start job, `tasks/cancel` | `FakeOllama` handler saw cancellation; state `cancelled`; `SessionState` deep-equals the snapshot (phase, `ask_n`, `pending`, messages); audit files moved to `cancelled-<job_id>/`; next `ask` writes `request-1.json` |
 | 18 | cancel running via `navigator_cancel` | same | returns `{"job_id":..., "state":"cancelled"}` |
 | 19 | cancel terminal | cancel a completed job | no-op; state `completed` |
-| 20 | fallback cancelled by client | cancel the `run_blocking` caller's scope while running | job ends `cancelled`; session restored |
+| 20 | navigator-wait | run `bin/navigator-wait` as a subprocess on: a completed result file; a cancelled one; a failed one; a `.pending.json` whose `server_pid` is a dead pid; a missing path | exit codes 0, 3, 4, 5, 2; stdout is one JSON line matching the table in section 7 |
 | 21 | timeout unset | no timeout; `FakeClock.advance(10**7)` while held | job still `running`; client timeout is `httpx.Timeout(None)`; no watcher task |
 | 22 | timeout set | `job_timeout=30`; hold; `advance(31)` | job `completed` with `Error(reason="timeout", stage="waiting on navigator (request-1)")`; session restored; `FakeOllama` saw cancellation |
 | 23 | httpx timeout derived | `job_timeout=30`, `advance(10)` before the send | recorded request timeout equals `httpx.Timeout(20.0)` |
 | 24 | timeout while queued | enqueue behind a held job is impossible (section 2.3), so enqueue with the worker stopped, `advance(31)`, start worker | `Error(reason="timeout", stage="queued")`; nothing sent |
 | 25 | 503 retry | `script_status(503, 3)` then `decide` | 4 sends with identical bytes; `sleep` called with 1, 2, 4; `Answered`; one `request-1.json` |
-| 26 | 503 backoff cap | `script_status(503, 8)` | `sleep` args `1,2,4,8,16,30,30,30` |
+| 26 | 503 retry cap | `NAVIGATOR_503_RETRIES=8`, `script_status(503, 9)` | `sleep` args `1,2,4,8,16,30,30,30`; job ends `Error(reason="ollama busy (503)")` with the body; 9 sends |
 | 27 | 503 with deadline | `job_timeout=5`, `script_status(503, 10)` | final `Error(reason="timeout", stage=...)`; no send after the deadline |
 | 28 | 503 cancelled | cancel during a backoff sleep | `cancelled`; session restored |
 | 29 | second ask while active | job 1 held `running`; `intercept_tool_call` (opted in) then `navigator_ask` again | second call returns `Error(reason="job <id1> active")` as a normal tool result (no task dict); `navigator_submit` on another session gets the same; after job 1 settles a new ask is accepted |
@@ -319,17 +347,17 @@ Phase 3 tests 1-24 are re-run after the async conversion of section 1.
 ## 11. Open questions
 
 From main doc §11:
-- **Remote Control.** Do MCP tasks apply to Remote Control sessions (`claude --remote-control` in a terminal, server mode, Remote Control from the desktop app)? Until checked, a Remote Control call that omits the opt-in takes the fallback path, which is correct either way.
-- **`keep_alive`.** Should it be sent now that a queue serializes requests? It would add a fifth payload key (phase 3 Q1). This phase does not send it.
+- **Remote Control.** Resolved by the main doc §2 probe: MCP Tasks with `CLAUDE_AUTO_BACKGROUND_TASKS=1`, otherwise section 7.
+- **`keep_alive`.** Resolved: not sent unless `NAVIGATOR_KEEP_ALIVE` is set (section 6).
 
 This phase:
-- **Q1.** Does Claude Code poll `tasks/get` / `tasks/cancel` with `io.modelcontextprotocol/clientCapabilities` in each request's `_meta`? If not, `require_client_extension` in the handlers would reject its polls (Q2).
-- **Q2.** Resolve Q1 with a probe, then decide whether the `tasks/*` handlers enforce -32021 (spec: `tasks.md:~790-800`) or only check the task id.
+- **Q1.** Resolved: Claude Code 2.1.316 sends `io.modelcontextprotocol/clientCapabilities` with the tasks extension on every `tasks/get` poll (main doc §2, Remote Control probe). `tasks/cancel` was not observed.
+- **Q2.** Enforcement stays off by default. Q1 shows it would work for Claude Code's `tasks/get`, but other clients have not been checked.
 - **Q3.** Not read from the wheel: `RequestParams` alias/`populate_by_name` configuration, the `mcp_types.CLIENT_CAPABILITIES_META_KEY` value (spec text gives `io.modelcontextprotocol/clientCapabilities`), and the import path of `MCPError`. Confirm against the installed package.
 - **Q4.** Does cancelling the task awaiting `AsyncClient.post` close the connection and abort generation in Ollama? Not stated in the httpx docs read; the test only asserts the handler saw cancellation.
 - **Q5.** Restoring `ask_n` and moving audit files on cancel (section 5) is a design choice not in phase 3 §8. Alternative: keep `ask_n` and the files.
 - **Q6.** Resolved: no concurrency setting. One worker, per the one-active-job-per-server rule.
-- **Q7.** 503 retries are unbounded without a deadline. Add a cap?
+- **Q7.** Resolved: `NAVIGATOR_503_RETRIES` cap (section 6).
 - **Q8.** Does Claude Code re-request `tasks/get` after receiving the result? Section 3 drops a job after one completed fetch (main doc §9b), so a repeat returns -32602.
 - **Q9.** Does phase 2 persist `THINKING` and `pending` such that `phase_before` is enough to recover (section 8)?
 - **Q10.** The `error` object shape of `FailedTask` (`schema.json` `$defs/Error`) was not inspected beyond `code` and `message` from the `tasks.md` examples.

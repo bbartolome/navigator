@@ -88,7 +88,7 @@ Phase 4 copies the pair charter into `modes/pair.py` (§2); phase 5 does the sco
 | Look at screenshot first; withhold if it shows a secret | C (§5) |
 | Image base64 in `images`, under about 1 MB, lower viewport to fit | S enforces limit (§5); viewport reduction: X (Q2) |
 | Write `request-N.json` / `reply-N.json`, check with jq | S writes them (§5); jq check replaced by server-side validation |
-| curl in background with `timeout: 7200000`, no polling | S job queue + MCP Tasks / auto-background fallback; no timeout by default, optional `NAVIGATOR_JOB_TIMEOUT` (§9b) |
+| curl in background with `timeout: 7200000`, no polling | S job queue; MCP Tasks, or `queued` + background `navigator-wait`; no timeout by default, optional `NAVIGATOR_JOB_TIMEOUT` (§9b) |
 | One resend for malformed or plain-text reply ("Call <tool> with that answer; don't reply in text.") | S (§2, §5) |
 | Empty reply: one retry with ±5-line excerpts; then AskUserQuestion with sizes | S retry; `Outcome.error` carries sizes; C/K asks user |
 | `need_info`: Claude answers with evidence, then asks the same question again | `Outcome.need_info`; K `pair`; C |
@@ -119,7 +119,7 @@ Phase 4 copies the pair charter into `modes/pair.py` (§2); phase 5 does the sco
 | Record each settled answer | S state (settled answers); `navigator_record` |
 | Final per-question summary (alternatives, decision, reasoning) | K `scout` (§9) |
 | AskUserQuestion: Approve / Reject / Other (Suggest Edit) | K `scout`; C |
-| curl via background Bash, no polling/Monitor | Replaced by a queued MCP job; the result arrives as a task result or notification; no polling (§9b, phase 3b) |
+| curl via background Bash, no polling/Monitor | Replaced by a queued MCP job: task notification, or a background `navigator-wait` (the same background-Bash pattern); no polling (§9b, phase 3b §7) |
 
 Before removal, tick every row against the shipped `server/` and `skills/` (phases 4-5 tests and the §12 smoke test).
 Any row left X or unverified blocks section 4.

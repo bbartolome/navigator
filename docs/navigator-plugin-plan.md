@@ -115,7 +115,8 @@ Source: [mcp](https://code.claude.com/docs/en/mcp)
     (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`).
   - Progress notifications don't extend the wall-clock `timeout`.
 - **Remote Control** ([remote-control](https://code.claude.com/docs/en/remote-control)). The session runs locally,
-  and local MCP servers stay available. The docs don't say whether MCP tasks apply to Remote Control sessions.
+  and local MCP servers stay available. The docs don't mention MCP tasks for Remote Control. The probe below
+  answers it.
 - **Probe, 2026-11-01, Claude Code 2.1.316.** A raw stdio test server observed the following:
   - Claude Code sent `server/discover` on 2026-07-28 and declared the tasks extension.
   - `tools/call` included a `progressToken`.
@@ -125,6 +126,16 @@ Source: [mcp](https://code.claude.com/docs/en/mcp)
       interval.
     - Each `statusMessage` showed up as task progress.
     - When the task completed, Claude received the result and reported it without being prompted.
+- **Probe, 2026-11-02, a Remote Control session.** Claude Code 2.1.316, process `claude --print --sdk-url …`, local
+  `navprobe` stdio server.
+  - Without `CLAUDE_AUTO_BACKGROUND_TASKS`: `tools/call` `clientCapabilities` held only `roots` and `elicitation`, with
+    no tasks opt-in, and the call returned as a plain blocking call.
+  - With `CLAUDE_AUTO_BACKGROUND_TASKS=1` set when the session started:
+    - `tools/call` carried the opt-in, and the `resultType: "task"` reply was accepted. Claude got the task handle at
+      once.
+    - Claude Code polled `tasks/get` every 2 s (`pollIntervalMs` 2000), and every poll also carried the opt-in.
+    - The result arrived as the task notification "MCP task rc-probe-1 (navprobe/probe) completed."
+  - In both runs, `server/discover` declared the tasks extension and `tools/call` carried a `progressToken`.
 
 ### Ollama concurrency
 
@@ -132,6 +143,44 @@ Source: [mcp](https://code.claude.com/docs/en/mcp)
 - `OLLAMA_MAX_QUEUE` defaults to 512 queued requests, and overflow returns a 503.
 - `OLLAMA_KEEP_ALIVE` defaults to 5 m, and a per-request `keep_alive` overrides it.
 - Source: [faq](https://docs.ollama.com/faq)
+
+### Ollama behaviour checked in source and live
+
+Checked against Ollama 0.40.12 on the MLX runner (the runner `qwen-agent:latest` uses). Source links are at commit
+`c1db5f9e`.
+- **Cancel.**
+  - The chat handler runs the completion under the client request's context
+    ([server/routes.go:3337-3340](https://github.com/ollama/ollama/blob/c1db5f9ef203b2e946161bf4c6bd4f2ec7f123b3/server/routes.go#L3337-L3340)), and generation checks that context on every
+    token ([mlxrunner/pipeline.go:296](https://github.com/ollama/ollama/blob/c1db5f9ef203b2e946161bf4c6bd4f2ec7f123b3/mlxrunner/pipeline.go#L296)).
+  - A cancelled request returns HTTP 499 ([server/routes.go:3638-3639](https://github.com/ollama/ollama/blob/c1db5f9ef203b2e946161bf4c6bd4f2ec7f123b3/server/routes.go#L3638-L3639)).
+  - Live: after the client was killed mid-generation, the next request started in about 0.6 s in 4 of 5 trials. One
+    trial blocked for 34 s. The cause is unknown, and the endpoint has other clients.
+- **keep_alive.**
+  - Accepted values: a duration string, a number of seconds, a negative value (keep loaded) or `0` (unload after the
+    response) ([docs/faq.mdx:297-305](https://github.com/ollama/ollama/blob/c1db5f9ef203b2e946161bf4c6bd4f2ec7f123b3/docs/faq.mdx#L297-L305)).
+  - A per-request value overrides `OLLAMA_KEEP_ALIVE` ([server/sched.go:555-558](https://github.com/ollama/ollama/blob/c1db5f9ef203b2e946161bf4c6bd4f2ec7f123b3/server/sched.go#L555-L558)).
+  - The endpoint used here already keeps the model loaded indefinitely (`/api/ps` `expires_at` in 2319).
+- **503.**
+  - Returned only as `ErrMaxQueue`, when the pending queue is full
+    ([server/sched.go:245-251](https://github.com/ollama/ollama/blob/c1db5f9ef203b2e946161bf4c6bd4f2ec7f123b3/server/sched.go#L245-L251), capacity `OLLAMA_MAX_QUEUE`).
+  - Body: `{"error":"server busy, please try again.  maximum pending requests exceeded"}`.
+  - Other statuses: load failure → 500, missing model → 404, capability mismatch → 400
+    ([server/routes.go:3636-3647](https://github.com/ollama/ollama/blob/c1db5f9ef203b2e946161bf4c6bd4f2ec7f123b3/server/routes.go#L3636-L3647)).
+
+### Python runtime for the plugin
+
+- The planning container (Ubuntu 24.04, Python 3.12.3) has no `pip`, no `ensurepip`, and none of `uv`, `uvx`, `pipx`
+  or `virtualenv`.
+- `python3 -m venv --without-pip` works there, and astral.sh, pypi.org and bootstrap.pypa.io are reachable.
+- The Claude Code plugin docs document no Python or uv pattern. Their only dependency pattern is Node: a SessionStart
+  hook that installs into `${CLAUDE_PLUGIN_DATA}`
+  ([components](https://code.claude.com/docs/en/plugins/components)). The docs don't say whether SessionStart hooks
+  finish before plugin MCP servers start.
+- The [MCPB README](https://github.com/modelcontextprotocol/mcpb) says traditional Python bundles can't portably
+  carry compiled dependencies, such as pydantic, which the MCP SDK needs.
+- uv installer: `curl -LsSf https://astral.sh/uv/<version>/install.sh | sh`.
+  - `UV_UNMANAGED_INSTALL=<dir>` installs to that dir without changing shell profiles
+    ([installer](https://docs.astral.sh/uv/reference/installer/)).
 
 ### LLMLingua-2
 
@@ -180,7 +229,9 @@ The plugin root is the repo root, next to the existing tracked `.claude/skills/`
 
 ```
 .claude-plugin/plugin.json      # { "name": "navigator", ... }
-.mcp.json                       # server "navigator": uv run --project ${CLAUDE_PLUGIN_ROOT}/server navigator-mcp
+.mcp.json                       # server "navigator": command ${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh
+scripts/launch.sh               # bootstraps the Python env in ${CLAUDE_PLUGIN_DATA}, then execs navigator-mcp
+bin/navigator-wait              # waits for a job's result file and prints the Outcome (§9b)
 skills/pair/SKILL.md            # replaces to-llm
 skills/scout/SKILL.md           # replaces scout-ahead
 server/pyproject.toml           # deps: mcp, httpx, pydantic, llmlingua; script entry point navigator-mcp
@@ -190,7 +241,7 @@ server/src/navigator_mcp/
   render.py                     # SessionState -> SESSION SUMMARY text
   compress.py                   # LLMLingua-2 wrapper (lazy, optional, memoized)
   ollama.py                     # /api/chat client, resend/retry rules, metrics capture
-  jobs.py                       # job queue, worker, MCP Tasks extension, progress fallback (§9b)
+  jobs.py                       # job queue, worker, MCP Tasks extension, queued/navigator-wait fallback (§9b)
   schemas.py                    # navigator tool JSON schemas
   modes/pair.py                 # pair charter + answer tools
   modes/scout.py                # scout charter + answer tools
@@ -202,8 +253,8 @@ docs/phases/
 ## 4. MCP tool surface
 
 Each call returns only the latest `Outcome` and never the session history. `navigator_ask` and `navigator_submit` run
-as queued jobs (§9b). Their `Outcome` arrives as an MCP task result when the call opts in to tasks, or as the
-(possibly backgrounded) tool result otherwise.
+as queued jobs (§9b). Their `Outcome` arrives as an MCP task result when the call opts in to tasks. Otherwise they
+return `{status: "queued", job_id}`, and `navigator-wait <job_id>` prints the `Outcome`.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
@@ -286,6 +337,9 @@ A pydantic `SessionState` holds:
 | `NAVIGATOR_MODEL` | `qwen-agent:latest` |
 | `NAVIGATOR_STATE_DIR` | `${CLAUDE_PLUGIN_DATA}/sessions` |
 | `NAVIGATOR_JOB_TIMEOUT` / `--job-timeout <s>` | unset: no job deadline, httpx timeout `None`, no `timeout` on the `.mcp.json` entry |
+| `NAVIGATOR_KEEP_ALIVE` | unset: no `keep_alive` is sent, so the Ollama server's `OLLAMA_KEEP_ALIVE` applies |
+| `NAVIGATOR_503_RETRIES` | attempt cap for Ollama 503 retries (default set in phase 3b) |
+| `CLAUDE_AUTO_BACKGROUND_TASKS=1` | Claude Code setting, not the server's. Set it in the environment of Remote Control and stream-json sessions so that calls become MCP tasks (§2 probe) |
 
 ## 9. Skills
 
@@ -301,8 +355,11 @@ Both skill bodies tell Claude to:
 - Never curl Ollama, and never decide alone.
 - Run or deny each returned tool call, then submit the results with `navigator_submit`.
 - Record claim and carry-forward verdicts with `navigator_record`.
-- After `navigator_ask` or `navigator_submit`, wait for the task result or task notification. Don't poll, and don't
-  call `navigator_status` in a loop (§9b).
+- After `navigator_ask` or `navigator_submit`:
+  - If it returned a task, wait for the task notification.
+  - If it returned `{status: "queued", job_id}`, run `navigator-wait <job_id>` through Bash with
+    `run_in_background: true`, and act on the `Outcome` it prints.
+  - Don't poll, and don't call `navigator_status` in a loop (§9b).
 
 ### `pair` (replaces to-llm)
 
@@ -356,8 +413,11 @@ Payload construction:
     `MCPServer` lifespan.
   - **One active job per server.** While a job is queued or running, a new `navigator_ask` or `navigator_submit`
     returns `error{reason: "job <id> active"}`.
-  - An Ollama 503 (its queue is full) is retried with backoff inside the job, and counts against the job deadline
-    when one is set.
+  - Ollama errors:
+    - A 503 (Ollama's queue is full) is retried with backoff inside the job, up to `NAVIGATOR_503_RETRIES`
+      attempts, and counts against the job deadline when one is set.
+    - 499, 500, 400 and 404 fail the job at once, with the status and body in the error.
+  - `keep_alive` is sent only when `NAVIGATOR_KEEP_ALIVE` is set.
 - **Delivery, preferred path: MCP Tasks.**
   - The server registers an SDK `Extension` subclass with identifier `io.modelcontextprotocol/tasks`.
   - Its `methods()` returns bindings for `tasks/get`, `tasks/cancel` and `tasks/update`.
@@ -368,12 +428,20 @@ Payload construction:
   - On completion, `tasks/get` carries `result`, which is the `Outcome` as a tool result.
   - `tasks/cancel` drops a queued job, or cancels the in-flight httpx request. Either way the job ends `cancelled`
     and the session state stays as it was before the job.
-- **Delivery, fallback (no opt-in).**
-  - This covers one-shot `-p`, the desktop app, VS Code, and possibly some Remote Control sessions (§2).
-  - The tool call waits for the job to settle and sends progress notifications (queue position and stage) at an
-    interval shorter than the stdio idle window.
-  - Claude Code moves the call to the background after 2 minutes, and the result arrives as a task notification.
-  - `navigator_cancel(job_id)` cancels the job.
+  - Cancelling the request is expected to free the Ollama slot (§2, "Ollama behaviour"). No job depends on that.
+  - This path applies in interactive terminal sessions, and in Remote Control, stream-json and Agent SDK sessions
+    started with `CLAUDE_AUTO_BACKGROUND_TASKS=1` (§2 probes).
+- **Delivery, fallback (no opt-in): `navigator-wait`.**
+  - Covers one-shot `-p`, the desktop app, VS Code, and Remote Control sessions without
+    `CLAUDE_AUTO_BACKGROUND_TASKS=1`.
+  - The tool returns `{status: "queued", job_id}` straight away.
+  - The skill runs the plugin executable `navigator-wait <job_id>` (on the Bash PATH from `bin/`) with
+    `run_in_background: true`.
+  - It blocks until the server writes the job's result file in the state dir, prints the `Outcome` JSON, and exits.
+    Claude receives it as a background-command completion notification, the same pattern to-llm used with curl. No
+    polling.
+  - `navigator_cancel(job_id)` cancels the job, and `navigator-wait` then exits non-zero. Phase 3b defines the exact
+    contract.
 - **Timeouts.** None by default.
   - An optional job deadline in seconds from enqueue can be given at server startup with `NAVIGATOR_JOB_TIMEOUT`
     (env in the `.mcp.json` entry) or `--job-timeout`.
@@ -407,21 +475,26 @@ Payload construction:
 
 ## 11. Open questions
 
-- Is `uv` available wherever the plugin runs?
+- Launcher (§3 `scripts/launch.sh`): which uv version to pin, and how to verify the installer download? Does a
+  first-run install fit within Claude Code's MCP server startup timeout?
 - What should the default compression rate and model be? What are the install and download size and the CPU
   latency in the container?
 - Does qwen-agent's answer quality change with compressed summaries?
 - Do MCP tool calls prompt for permission after the skill's invoking turn? If they do, add a settings allow rule.
 - How are the synced to-llm and scout-ahead skills removed?
-- Should `keep_alive` be sent? It adds a fifth key to the to-llm payload.
 - Does `/api/chat` return `prompt_eval_cached_count`, and how much of the prefix does Ollama reuse with this payload
   layout?
 - Is the append-only tool-round layout (§9a) acceptable in place of to-llm's per-send summary rewrite?
-- Do MCP tasks apply to Remote Control sessions? Check `claude --remote-control` in a terminal, server mode, and
-  Remote Control started from the desktop app.
-- Should `keep_alive` be sent now that a queue serializes requests?
-- `uv` and `python3 -m venv` were both unavailable in the planning container. What runtime does `.mcp.json` launch
-  the server with?
+- One live cancel trial blocked the next request for 34 s (§2). Is that reproducible on an endpoint with no other
+  clients?
+- Resolved:
+  - keep_alive: not sent by default.
+  - 503: capped retries.
+  - cancel: expected to free the slot.
+  - Remote Control: MCP Tasks with `CLAUDE_AUTO_BACKGROUND_TASKS=1`, `navigator-wait` otherwise.
+  - Claude Code sends the tasks opt-in on `tasks/get`.
+  - Runtime: `scripts/launch.sh`.
+  - Details in §2 and §9b.
 
 ## 12. Verification
 
@@ -434,9 +507,12 @@ Payload construction:
 - Token counts are compared with `NAVIGATOR_COMPRESSION` on and off.
 - In an interactive terminal session, `navigator_ask` returns a task straight away. `/tasks` shows its
   `statusMessage`, and Claude acts on the `Outcome` when the task completes.
-- With a one-shot `claude -p`, the same call takes the fallback path and still returns the `Outcome`.
+- With a one-shot `claude -p`, the same call returns `queued`. A background `navigator-wait <job_id>` then prints the
+  `Outcome`.
 - A second `navigator_ask` while a job is active returns the `job <id> active` error.
-- Remote Control check: run `claude --remote-control` and drive one `navigator_ask` from claude.ai.
+- Remote Control check, run from claude.ai:
+  - With `CLAUDE_AUTO_BACKGROUND_TASKS=1`, `navigator_ask` returns a task.
+  - Without it, `navigator_ask` returns `queued`, and `navigator-wait` delivers the `Outcome`.
 
 ## Phase documents
 
