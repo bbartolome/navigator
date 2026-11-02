@@ -21,7 +21,7 @@ from mcp.shared.exceptions import MCPError
 from mcp.types import CLIENT_CAPABILITIES_META_KEY, RequestParams
 from pydantic import ValidationError
 
-from . import modes
+from . import compress, modes
 from . import ollama
 from . import session as S
 from .ollama import AskArgs, Error, Outcome, SubmitArgs
@@ -239,6 +239,7 @@ class JobManager:
             deadline_remaining=lambda: self._remaining(job),
             sleep=self._backoff_sleep,
             max_503_retries=self._max_503,
+            transform=compress.make_transform(),
         )
         outcome: Outcome | None = None
         failure: str | None = None

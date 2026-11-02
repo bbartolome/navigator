@@ -6,6 +6,9 @@ from typing import Any, Literal
 import anyio
 from mcp.server import MCPServer
 
+import json
+
+from . import compress
 from . import jobs as J
 from . import ollama, session
 from .render import render_summary
@@ -49,7 +52,8 @@ def navigator_status(session_id: str) -> str:
         f"METRICS: sends={m.sends} prompt_eval_count={m.prompt_eval_count}"
         f" prompt_eval_cached_count={m.prompt_eval_cached_count} prompt_eval_duration={m.prompt_eval_duration}"
     )
-    return render_summary(state) + "\n" + metrics
+    summary = render_summary(state, compress.make_transform())
+    return summary + "\n" + metrics + "\nCOMPRESSION: " + json.dumps(compress.status(), sort_keys=True)
 
 
 @mcp.tool()

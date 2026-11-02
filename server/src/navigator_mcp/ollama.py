@@ -170,6 +170,7 @@ class Runtime:
     deadline_remaining: Callable[[], float | None] = lambda: None
     sleep: Callable[[float], Awaitable[None]] = anyio.sleep
     max_503_retries: int = 8
+    transform: Callable[[str, str], str] | None = None  # compression hook for the summary (phase 6)
 
 
 def _placeholder(b64: str) -> str:
@@ -611,7 +612,7 @@ async def _ask(state: S.SessionState, args: AskArgs, rt: Runtime) -> Outcome:
     images = [_encode_image(p) for p in args.images]  # may raise ImageError before any change
     question = _with_suffix(args.question, args.answer_tool)
     excerpts = [e.model_dump() for e in args.excerpts]
-    summary = render_summary(state)
+    summary = render_summary(state, rt.transform)
 
     state.ask_n += 1
     state.rounds = 0
