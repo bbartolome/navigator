@@ -278,8 +278,9 @@ def settle_question(s: SessionState, answer: SettledAnswer) -> None:
 
 class DecidedRec(_M):
     kind: Literal["decided"]
-    text: str
+    text: str | None = None
     rationale: str = ""
+    scope: str | None = None  # "question_list" freezes a scout question list (phase 5 section 5)
 
 
 class RejectedRec(_M):
@@ -323,7 +324,14 @@ def apply_record(state: SessionState, kind: str, payload: dict[str, Any]) -> Ses
     rec = _record.validate_python({**payload, "kind": kind})  # raises ValidationError
 
     if isinstance(rec, DecidedRec):
-        state.decided.append(Decided(text=rec.text, rationale=rec.rationale))
+        if rec.scope is not None:
+            if rec.scope != "question_list":
+                raise ValueError(f"unknown decided scope: {rec.scope}")
+            freeze_questions(state)  # scout only; needs agreeing with a non-empty list
+        elif rec.text is None:
+            raise ValueError("decided needs text, or a scope")
+        else:
+            state.decided.append(Decided(text=rec.text, rationale=rec.rationale))
     elif isinstance(rec, RejectedRec):
         state.rejected_claims.append(RejectedClaim(claim=rec.claim, evidence=rec.evidence))
     elif isinstance(rec, ClarifRec):

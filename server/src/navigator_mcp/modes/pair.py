@@ -1,5 +1,6 @@
 """Pair mode (phase 4): the charter, the set_plan and decide answer tools, and their field checks."""
 
+from .. import session as S
 from ..schemas import DECIDE_TOOL, SET_PLAN_TOOL
 
 # Byte-equal to the text between <charter> tags in the to-llm skill (tests/test_pair.py test 1).
@@ -68,12 +69,20 @@ class PairMode:
     charter = CHARTER
     answer_tools = {"set_plan": SET_PLAN_TOOL, "decide": DECIDE_TOOL}
 
-    def missing_fields(self, tool: str, args: dict) -> list[str]:
+    def ask_error(self, state, tool: str) -> str | None:
+        return None
+
+    def missing_fields(self, tool: str, args: dict, state=None) -> list[str]:
         if tool == "set_plan":
             return _check_set_plan(args)
         if tool == "decide":
             return _check_decide(args)
         return [f"unknown answer tool {tool}"]
+
+    def apply_answer(self, state, tool: str, args: dict) -> dict:
+        if tool == "set_plan":
+            S.set_plan(state, args["steps"], args["carry_forward"])  # the summary's STEPS come from here
+        return dict(args)
 
     def carry_forward(self, args: dict) -> list[str]:
         return list(args["carry_forward"])

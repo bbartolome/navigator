@@ -202,3 +202,23 @@ def test_20_claude_plugin_validate_passes():
     proc = subprocess.run(["claude", "plugin", "validate", str(REPO)], capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Validation passed" in proc.stdout
+
+
+# Added with phase 5: the set_plan answer now fills the summary's STEPS, and scope records are scout-only
+
+
+async def test_21_set_plan_answer_stores_the_steps_in_the_summary():
+    from navigator_mcp.render import render_summary
+
+    fake = FakeOllama([call("set_plan", steps=[VALID_STEP], carry_forward=[])])
+    st = _state()
+    out = await ask(st, _ask("First question?", "set_plan"), runtime(fake, PAIR))
+    assert isinstance(out, Answered)
+    assert len(st.steps) == 1
+    assert "- [ ] 1 files: api/users.py | change: add --version | verify: pytest" in render_summary(st)
+
+
+def test_22_question_list_scope_is_refused_in_a_pair_session():
+    st = _state()
+    with pytest.raises(ValueError):
+        S.apply_record(st, "decided", {"scope": "question_list"})

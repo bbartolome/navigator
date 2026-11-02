@@ -35,8 +35,14 @@ class StubMode:
     charter = CHARTER
     answer_tools = {"decide": DECIDE_TOOL}
 
-    def missing_fields(self, tool: str, args: dict) -> list[str]:
+    def ask_error(self, state, tool: str):
+        return None
+
+    def missing_fields(self, tool: str, args: dict, state=None) -> list[str]:
         return [f for f in ("decision", "carry_forward") if f not in args]
+
+    def apply_answer(self, state, tool: str, args: dict) -> dict:
+        return dict(args)
 
     def carry_forward(self, args: dict) -> list[str]:
         return list(args["carry_forward"])

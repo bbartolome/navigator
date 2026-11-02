@@ -126,7 +126,11 @@ class Mode(Protocol):
     charter: str
     answer_tools: dict[str, dict]
 
-    def missing_fields(self, tool: str, args: dict) -> list[str]: ...
+    def ask_error(self, state: "S.SessionState", tool: str) -> str | None: ...  # a phase gate, or None
+
+    def missing_fields(self, tool: str, args: dict, state: "S.SessionState | None" = None) -> list[str]: ...
+
+    def apply_answer(self, state: "S.SessionState", tool: str, args: dict) -> dict: ...  # mutates, returns the result
 
     def carry_forward(self, args: dict) -> list[str]: ...
 
@@ -456,17 +460,23 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
         answer_calls = [c for c in reply.calls if c.name == answer_tool]
         if answer_calls:
             ans = answer_calls[0]
-            missing = rt.mode.missing_fields(ans.name, ans.arguments)
+            missing = rt.mode.missing_fields(ans.name, ans.arguments, state)
             carry: list[str] = []
             if not missing:
                 carry = rt.mode.carry_forward(ans.arguments)
                 if len(carry) > CARRY_FORWARD_MAX:
                     missing = ["carry_forward (at most 5 lines)"]
+            result: dict[str, Any] = {}
+            if not missing:
+                try:
+                    result = rt.mode.apply_answer(state, ans.name, ans.arguments)
+                except ValueError as exc:  # a mode rule the field checks did not catch: bounce it
+                    missing = [f"{ans.name} ({exc})"]
             if not missing:
                 S.set_carry_forward(state, carry)
                 return _settle(
                     state,
-                    Answered(status="answered", tool=ans.name, result=ans.arguments, carry_forward=carry),
+                    Answered(status="answered", tool=ans.name, result=result, carry_forward=carry),
                 )
             # Missing fields go back as a bounce; the other calls in the reply are ignored.
             state.bounces += 1
@@ -595,6 +605,9 @@ async def _ask(state: S.SessionState, args: AskArgs, rt: Runtime) -> Outcome:
         return _err("session awaiting submit")
     if args.answer_tool not in rt.mode.answer_tools:
         return _err(f"answer_tool {args.answer_tool!r} is not offered in {rt.mode.name} mode")
+    gate = rt.mode.ask_error(state, args.answer_tool)
+    if gate is not None:
+        return _err(gate)
     images = [_encode_image(p) for p in args.images]  # may raise ImageError before any change
     question = _with_suffix(args.question, args.answer_tool)
     excerpts = [e.model_dump() for e in args.excerpts]
