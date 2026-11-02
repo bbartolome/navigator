@@ -1,0 +1,25 @@
+SESSION SUMMARY
+GOAL: Add retry to fetch_user
+MODE: pair
+CONTEXT: Repo: api/. Python 3.12.
+DECIDED:
+- Use exponential backoff | why: Matches api/http.py
+REJECTED CLAIMS:
+- fetch_user is async | evidence: api/users.py:12 def fetch_user
+CLARIFICATIONS GIVEN:
+- Q: Which HTTP client? | A: httpx, api/http.py:3
+FILES READ:
+- api/users.py:1-40 (fetch_user definition)
+WEB SEARCHES:
+- httpx retry -> https://example.com/r (retries option)
+SHOTS:
+- shot-1: http://localhost:3000/users (user list renders)
+ACTION LOG:
+- call-0001 read_file api/users.py:1-40 -> ran: 40 lines
+STEPS:
+- [x] 1 files: api/users.py | change: add retry loop | verify: pytest api
+- [ ] 2 files:  | change: add timeout | verify: pytest api
+CURRENT STEP: 2
+OPEN CHALLENGE: Step 2 skips timeout
+CARRY FORWARD:
+- Backoff base is 0.5s

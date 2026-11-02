@@ -1,0 +1,17 @@
+SESSION SUMMARY
+GOAL: Settle storage format
+MODE: scout
+CONTEXT: (none)
+DECIDED: (none)
+REJECTED CLAIMS: (none)
+CLARIFICATIONS GIVEN: (none)
+FILES READ: (none)
+WEB SEARCHES: (none)
+SHOTS: (none)
+ACTION LOG: (none)
+SETTLED ANSWERS:
+- Q1: JSON or SQLite? | decision: JSON | reasoning: simplest, additive later | alternatives: JSON (for: no deps; against: no queries); SQLite (for: queries; against: new dep)
+OPEN QUESTIONS:
+- Q2: Where is state stored?
+OPEN CHALLENGE: (none)
+CARRY FORWARD: (none)

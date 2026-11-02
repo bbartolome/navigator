@@ -1,0 +1,15 @@
+SESSION SUMMARY
+GOAL: Add retry to fetch_user
+MODE: pair
+CONTEXT: (none)
+DECIDED: (none)
+REJECTED CLAIMS: (none)
+CLARIFICATIONS GIVEN: (none)
+FILES READ: (none)
+WEB SEARCHES: (none)
+SHOTS: (none)
+ACTION LOG: (none)
+STEPS: (none)
+CURRENT STEP: (none)
+OPEN CHALLENGE: (none)
+CARRY FORWARD: (none)
