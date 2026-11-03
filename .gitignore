@@ -3,3 +3,5 @@
 server/.venv/
 __pycache__/
 .pytest_cache/
+.claude/
+skills-lock.json
