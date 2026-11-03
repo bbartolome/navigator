@@ -472,7 +472,6 @@ Payload construction:
    - tests that the protected spans come through unchanged
    - token counts before and after
    - an A/B run on one real session
-7. **Retire.** Remove to-llm and scout-ahead.
 
 ## 11. Open questions
 
@@ -526,4 +525,3 @@ The implementation detail for each milestone (§10) is in its own doc:
 4. [Phase 4: Pair mode + `skills/pair`](phases/phase-4-pair.md)
 5. [Phase 5: Scout mode + `skills/scout`](phases/phase-5-scout.md)
 6. [Phase 6: LLMLingua-2 compression](phases/phase-6-compression.md)
-7. [Phase 7: Retire to-llm / scout-ahead](phases/phase-7-retire.md)

@@ -295,7 +295,7 @@ async def test_agree_questions_is_refused_once_the_list_is_frozen():
     assert fake.requests == []
 
 
-# Justification form in scout mode (phase 7 Q3): a tool parameter on every exploration tool, as in pair mode
+# Justification form in scout mode (decided 2026-11-02): a tool parameter on every exploration tool, as in pair mode
 
 
 async def test_19_scout_request_offers_justification_as_a_required_tool_parameter():

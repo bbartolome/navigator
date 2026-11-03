@@ -9,7 +9,6 @@ questions. Claude reaches the navigator only through `navigator_*` MCP tools, ne
 
 - Phases 1–6 are implemented: session state, the Ollama loop, async jobs with MCP Tasks, pair mode, scout mode, and
   compression.
-- Phase 7, retiring the old `to-llm` and `scout-ahead` skills, is not done.
 - The plan is in [`docs/navigator-plugin-plan.md`](docs/navigator-plugin-plan.md).
 
 ## Requirements
