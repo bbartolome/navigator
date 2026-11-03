@@ -3,6 +3,7 @@
 Table numbers follow the phase doc. Test 20 runs `claude plugin validate` on the repo.
 """
 
+import hashlib
 import json
 import re
 import shutil
@@ -23,7 +24,6 @@ from navigator_mcp.schemas import NAVIGATOR_TOOLS, SET_PLAN_TOOL, DECIDE_TOOL
 pytestmark = pytest.mark.anyio
 
 REPO = Path(__file__).resolve().parents[2]
-FIXTURE = Path(__file__).parent / "fixtures" / "to-llm-SKILL.md"
 SKILL = REPO / "skills" / "pair" / "SKILL.md"
 
 NAV_NAMES = ["read_file", "list_dir", "grep", "screenshot", "web_search", "need_info"]
@@ -53,12 +53,12 @@ def _user_text(body: bytes) -> str:
     return json.loads(body)["messages"][1]["content"]
 
 
-# 1 charter byte-equal to the to-llm charter
-def test_01_charter_is_byte_equal_to_the_to_llm_charter():
-    source = FIXTURE.read_text(encoding="utf-8")
-    match = re.search(r"<charter>\n?(.*?)</charter>", source, re.S)
-    assert match is not None
-    assert CHARTER == match.group(1)
+# 1 charter byte-equal to the to-llm charter. The skill file is not in the repo; the test checks a digest of its charter.
+CHARTER_SHA256 = "1e93e56b08586f0bede6fd78356abb01c1db7942bdaf267fe1156799f6887280"
+
+
+def test_01_charter_matches_the_to_llm_charter_digest():
+    assert hashlib.sha256(CHARTER.encode("utf-8")).hexdigest() == CHARTER_SHA256
 
 
 # 2 schemas
