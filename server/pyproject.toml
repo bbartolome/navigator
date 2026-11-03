@@ -1,6 +1,7 @@
 [project]
 name = "navigator-mcp"
 version = "0.1.1"
+license = "Apache-2.0"
 description = "Navigator MCP server"
 requires-python = ">=3.11"
 dependencies = [

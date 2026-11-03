@@ -1,8 +1,13 @@
 {
   "name": "navigator",
   "description": "Local marketplace for the navigator plugin: pairs Claude with a local Ollama navigator model.",
-  "owner": { "name": "Ben B" },
+  "owner": {
+    "name": "bbartolome"
+  },
   "plugins": [
-    { "name": "navigator", "source": "./" }
+    {
+      "name": "navigator",
+      "source": "./"
+    }
   ]
 }
