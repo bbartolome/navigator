@@ -107,7 +107,7 @@ The body has these fields:
 | `messages` | The converted messages (section 6). |
 | `tools` | The converted tools (this section). |
 | `thinking` | `{"type": "adaptive"}` |
-| `output_config` | `{"effort": "high"}` |
+| `output_config` | `{"effort": "medium"}` |
 | `cache_control` | `{"type": "ephemeral"}` |
 | `fallbacks` | `"default"`. Only for the models in `FALLBACK_MODELS`. |
 
@@ -297,7 +297,7 @@ The tests must not send requests to the Claude API.
 
 ## 12. Open questions
 
-1. Is `high` the correct effort for the navigator? An option is a new variable, `NAVIGATOR_EFFORT`.
+1. Is `medium` the correct effort for the navigator? An option is a new variable, `NAVIGATOR_EFFORT`.
 2. Is `16000` enough for `max_tokens`? A larger value can make it necessary to use streaming.
 3. Must `NAVIGATOR_MODEL` be shared by the two providers? If a user sets it for Ollama and then selects `anthropic`,
    the Claude API returns 404. An option is a new variable, `NAVIGATOR_ANTHROPIC_MODEL`.
