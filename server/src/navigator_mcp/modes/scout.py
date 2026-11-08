@@ -13,6 +13,38 @@ SETTLE_TOOL = {'type': 'function', 'function': {'name': 'settle', 'description':
 
 _CARRY_MAX = 5
 _AGREE_MAX = 12
+_OPTIONS_MIN = 2
+_OPTIONS_MAX = 8
+
+
+def check_options(answer_tool: str, options: list[str] | None) -> None:
+    """Phase 5b section 2: raises ValueError with the driver-facing reason; returns None when the options are valid.
+
+    None and [] both mean no options. ollama._ask and jobs._enqueue_locked call this.
+    """
+    given = options or []
+    if answer_tool != "settle":
+        if given:
+            raise ValueError("options is only used with answer_tool settle")
+        return
+    if not given:
+        raise ValueError("settle needs options: 2 to 8 plain strings, one per option")
+    if not _OPTIONS_MIN <= len(given) <= _OPTIONS_MAX:
+        raise ValueError(f"options: 2 to 8 entries; got {len(given)}")
+    collapsed = [" ".join(text.split()) for text in given]
+    for k, text in enumerate(collapsed, start=1):
+        if text == "":
+            raise ValueError(f"options: entry {k} is empty")
+    first_seen: dict[str, int] = {}
+    for k, text in enumerate(collapsed, start=1):
+        if text in first_seen:
+            raise ValueError(f"options: entries {first_seen[text]} and {k} have the same text")
+        first_seen[text] = k
+
+
+def option_texts(options: list[str]) -> dict[str, str]:
+    """Label to collapsed text, labels A upwards in the order given. Call after check_options has passed."""
+    return {chr(ord("A") + i): " ".join(text.split()) for i, text in enumerate(options)}
 
 
 def _carry_problem(args: dict) -> list[str]:

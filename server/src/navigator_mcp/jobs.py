@@ -22,6 +22,7 @@ from mcp.types import CLIENT_CAPABILITIES_META_KEY, RequestParams
 from pydantic import ValidationError
 
 from . import compress, modes
+from .modes.scout import check_options
 from . import ollama
 from . import session as S
 from .ollama import AskArgs, Error, Outcome, SubmitArgs
@@ -169,6 +170,8 @@ class JobManager:
             raise ValueError(f"unknown session_id: {session_id}") from None
         if self._mode_for(state.mode) is None:
             raise ValueError(f"no mode registered for {state.mode!r} yet")
+        if kind == "ask":  # phase 5b section 2: refused at enqueue, so the queued and Tasks paths both return it
+            check_options(args.answer_tool, args.options)
         deadline = None if self._job_timeout is None else self._clock() + self._job_timeout
         job = Job(uuid.uuid4().hex, session_id, kind, args, state.phase, deadline)
         self._jobs[job.job_id] = job

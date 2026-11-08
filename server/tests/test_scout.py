@@ -38,13 +38,14 @@ def _questions(ids=("q1", "q2")):
 
 
 def _alts():
+    # phase 5b: options are named by their labels, A and B, which the legend shows for the two option texts
     return [
-        {"name": "JSON", "case_for": "no deps", "case_against": "no queries", "backwards_compatible": True},
-        {"name": "SQLite", "case_for": "queries", "case_against": "new dep", "backwards_compatible": True},
+        {"name": "A", "case_for": "no deps", "case_against": "no queries", "backwards_compatible": True},
+        {"name": "B", "case_for": "queries", "case_against": "new dep", "backwards_compatible": True},
     ]
 
 
-def _settle(qid, decision="JSON", alternatives=None, complexity=None, reasoning="simplest"):
+def _settle(qid, decision="A", alternatives=None, complexity=None, reasoning="simplest"):
     args = {
         "question_id": qid,
         "alternatives": alternatives if alternatives is not None else _alts(),
@@ -69,8 +70,11 @@ async def _agreed(st) -> None:
     apply_record(st, "decided", {"scope": "question_list"})
 
 
+_OPTS = ["JSON file", "SQLite database"]  # phase 5b: every settle ask carries options
+
+
 def _ask(tool, question="Settle which?") -> AskArgs:
-    return AskArgs(question=question, answer_tool=tool)
+    return AskArgs(question=question, answer_tool=tool, options=_OPTS if tool == "settle" else [])
 
 
 def _tool_text(body: bytes) -> str:
@@ -183,7 +187,7 @@ async def test_12_incompatible_choice_without_complexity_justification_is_bounce
     st = _start()
     await _agreed(st)
     fake = FakeOllama(
-        [_settle("q1", decision="SQLite", alternatives=incompatible), _settle("q1", decision="SQLite", alternatives=incompatible, complexity="needs queries")]
+        [_settle("q1", decision="B", alternatives=incompatible), _settle("q1", decision="B", alternatives=incompatible, complexity="needs queries")]
     )
     out = await ask(st, _ask("settle"), runtime(fake, SCOUT))
     assert isinstance(out, Answered)

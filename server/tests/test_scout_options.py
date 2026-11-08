@@ -140,3 +140,126 @@ def test_old_answer_with_no_options_prints_exactly_as_before():
         "Q1: JSON or SQLite? | decision: JSON | reasoning: simplest, additive later"
         " | alternatives: JSON (for: no deps; against: no queries); SQLite (for: queries; against: new dep)"
     )
+
+
+# Task 3: check_options, option_texts, and the question the navigator reads (sections 2 and 3)
+
+from fakes import FakeOllama, call, runtime  # noqa: E402
+from navigator_mcp.modes.scout import SCOUT, check_options, option_texts  # noqa: E402
+from navigator_mcp.ollama import Answered, Error, ask  # noqa: E402
+
+SETTLE_OPTIONS = ["JSON file", "SQLite database"]
+
+
+def test_settle_without_options_is_refused():
+    with pytest.raises(ValueError, match="^settle needs options: 2 to 8 plain strings, one per option$"):
+        check_options("settle", None)
+    with pytest.raises(ValueError, match="^settle needs options"):
+        check_options("settle", [])
+
+
+@pytest.mark.parametrize("options, got", [(["JSON file"], 1), ([f"option {i}" for i in range(9)], 9)])
+def test_settle_needs_two_to_eight_options(options, got):
+    with pytest.raises(ValueError, match=rf"^options: 2 to 8 entries; got {got}$"):
+        check_options("settle", options)
+
+
+def test_an_entry_that_is_empty_after_collapse_is_refused():
+    with pytest.raises(ValueError, match=r"^options: entry 2 is empty$"):
+        check_options("settle", ["JSON file", "   \n  "])
+
+
+def test_entries_with_the_same_collapsed_text_are_refused():
+    with pytest.raises(ValueError, match=r"^options: entries 1 and 2 have the same text$"):
+        check_options("settle", ["JSON  file", "JSON\nfile"])
+
+
+def test_valid_settle_options_pass():
+    assert check_options("settle", SETTLE_OPTIONS) is None
+
+
+def test_options_with_another_tool_are_refused():
+    with pytest.raises(ValueError, match="^options is only used with answer_tool settle$"):
+        check_options("agree_questions", ["x", "y"])
+
+
+@pytest.mark.parametrize("options", [None, []])
+def test_no_options_is_fine_for_other_tools(options):
+    assert check_options("agree_questions", options) is None
+    assert check_options("set_plan", options) is None
+
+
+def test_option_texts_collapse_whitespace_and_label_in_order():
+    assert option_texts(["JSON\nfile", "  SQLite   database "]) == {"A": "JSON file", "B": "SQLite database"}
+
+
+def _settling_state() -> S.SessionState:
+    st = S.create_session("scout", "Settle storage format", "Ticket T-1")
+    st.scout_phase = "settling"
+    st.questions = [S.ScoutQuestion(id="q1", question="JSON or SQLite?")]
+    return st
+
+
+def _settle_reply(labels=("A", "B")):
+    alternatives = [{"name": x, "case_for": "no deps", "case_against": "no queries", "backwards_compatible": True} for x in labels]
+    return call("settle", question_id="q1", alternatives=alternatives, decision="A", reasoning="simplest", carry_forward=[])
+
+
+def _user_content(fake) -> str:
+    return json.loads(fake.requests[0])["messages"][-1]["content"]
+
+
+@pytest.mark.anyio
+async def test_settle_without_options_is_refused_before_any_request():
+    fake = FakeOllama([])
+    out = await ask(_settling_state(), AskArgs(question="Which?", answer_tool="settle"), runtime(fake, SCOUT))
+    assert isinstance(out, Error)
+    assert out.reason == "settle needs options: 2 to 8 plain strings, one per option"
+    assert fake.requests == []
+
+
+@pytest.mark.anyio
+async def test_question_ends_with_the_options_legend_then_the_suffix():
+    st = _settling_state()
+    fake = FakeOllama([_settle_reply()])
+    out = await ask(st, AskArgs(question="Which one?", answer_tool="settle", options=SETTLE_OPTIONS), runtime(fake, SCOUT))
+    assert isinstance(out, Answered)
+    assert _user_content(fake).endswith("Which one?\n\nOptions:\nA: JSON file\nB: SQLite database\nAnswer by calling settle.")
+    assert st.ask_options == {"A": "JSON file", "B": "SQLite database"}
+
+
+@pytest.mark.anyio
+async def test_three_options_make_a_three_line_legend():
+    fake = FakeOllama([_settle_reply(labels=("A", "B", "C"))])
+    out = await ask(
+        _settling_state(),
+        AskArgs(question="Which one?", answer_tool="settle", options=["JSON file", "SQLite database", "one file per session"]),
+        runtime(fake, SCOUT),
+    )
+    assert isinstance(out, Answered)
+    assert _user_content(fake).endswith(
+        "Which one?\n\nOptions:\nA: JSON file\nB: SQLite database\nC: one file per session\nAnswer by calling settle."
+    )
+
+
+@pytest.mark.anyio
+async def test_a_driver_suffix_is_not_doubled_and_the_legend_comes_before_it():
+    fake = FakeOllama([_settle_reply()])
+    await ask(
+        _settling_state(),
+        AskArgs(question="Which one?\nAnswer by calling settle.", answer_tool="settle", options=SETTLE_OPTIONS),
+        runtime(fake, SCOUT),
+    )
+    content = _user_content(fake)
+    assert content.count("Answer by calling settle.") == 1
+    assert content.endswith("Which one?\n\nOptions:\nA: JSON file\nB: SQLite database\nAnswer by calling settle.")
+
+
+@pytest.mark.anyio
+async def test_a_non_settle_ask_clears_ask_options():
+    st = S.create_session("scout", "Settle storage format", "Ticket T-1")
+    st.ask_options = {"A": "left over from a settle ask"}
+    fake = FakeOllama([call("agree_questions", questions=[{"id": "q1", "question": "JSON or SQLite?", "why_it_matters": "storage"}], carry_forward=[])])
+    out = await ask(st, AskArgs(question="Which questions?", answer_tool="agree_questions"), runtime(fake, SCOUT))
+    assert isinstance(out, Answered)
+    assert st.ask_options is None

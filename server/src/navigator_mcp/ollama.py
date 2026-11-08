@@ -261,6 +261,19 @@ def _with_suffix(question: str, tool: str) -> str:
     return stripped + "\n" + line
 
 
+def _without_suffix(question: str, tool: str) -> str:
+    """The question without a trailing 'Answer by calling <tool>.' line, if the driver wrote one (phase 5b section 3)."""
+    lines = question.rstrip().split("\n")
+    if lines[-1].strip() == f"Answer by calling {tool}.":
+        return "\n".join(lines[:-1]).rstrip()
+    return question.rstrip()
+
+
+def _legend(options: dict[str, str]) -> str:
+    """The options block the navigator reads after the question (phase 5b section 3)."""
+    return "\n\nOptions:\n" + "\n".join(f"{label}: {text}" for label, text in options.items())
+
+
 def _user_content(summary: str, excerpts: list[dict], question: str) -> str:
     parts = [summary]
     if excerpts:
@@ -610,8 +623,19 @@ async def _ask(state: S.SessionState, args: AskArgs, rt: Runtime) -> Outcome:
     gate = rt.mode.ask_error(state, args.answer_tool)
     if gate is not None:
         return _err(gate)
+    # phase 5b section 2: refused before any state change. Imported here: modes/scout.py imports this module.
+    from .modes.scout import check_options, option_texts
+
+    try:
+        check_options(args.answer_tool, args.options)
+    except ValueError as exc:
+        return _err(str(exc))
+    options = option_texts(args.options) if args.answer_tool == "settle" else None
     images = [_encode_image(p) for p in args.images]  # may raise ImageError before any change
-    question = _with_suffix(args.question, args.answer_tool)
+    if options:
+        question = _with_suffix(_without_suffix(args.question, args.answer_tool) + _legend(options), args.answer_tool)
+    else:
+        question = _with_suffix(args.question, args.answer_tool)
     excerpts = [e.model_dump() for e in args.excerpts]
     summary = render_summary(state, rt.transform)
 
@@ -621,6 +645,7 @@ async def _ask(state: S.SessionState, args: AskArgs, rt: Runtime) -> Outcome:
     state.bounces = 0
     state.resent = False
     state.retried = False
+    state.ask_options = options
     state.ask_parts = {"summary": summary, "excerpts": excerpts, "question": question, "answer_tool": args.answer_tool}
     state.messages = [{"role": "system", "content": rt.mode.charter}, _user_message(summary, excerpts, question, images)]
     state.phase = "THINKING"

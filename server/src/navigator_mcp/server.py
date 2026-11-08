@@ -1,12 +1,12 @@
 import sys
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import anyio
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 import json
 
@@ -119,9 +119,19 @@ def navigator_ask(
     answer_tool: str,
     excerpts: list[ollama.Excerpt] | None = None,
     images: list[str] | None = None,
+    options: Annotated[
+        list[str] | None,
+        Field(
+            description="Required when answer_tool is settle: 2 to 8 plain strings, one per option. The server labels them "
+            "A, B, and so on, and the navigator must judge each one. Not used with other tools."
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Ask the navigator one question. Returns the queued reply; the Outcome arrives as the job result."""
-    args = ollama.AskArgs(question=question, answer_tool=answer_tool, excerpts=excerpts or [], images=images or [])
+    # phase 5b section 2: options are checked at enqueue (jobs._enqueue_locked), so this body does not check them
+    args = ollama.AskArgs(
+        question=question, answer_tool=answer_tool, excerpts=excerpts or [], images=images or [], options=options or []
+    )
     return jobs.enqueue_queued(session_id, "ask", args)
 
 

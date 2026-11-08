@@ -127,3 +127,38 @@ def test_without_opt_in_the_ask_returns_queued_at_once(client):
     assert queued["status"] == "queued"
     assert Path(queued["result_path"]).is_absolute()
     assert queued["wait_command"].startswith("navigator-wait ")
+
+
+# Phase 5b section 9: a settle ask with no options is refused at enqueue, on both the queued and the Tasks path
+
+NO_OPTIONS_REASON = "settle needs options: 2 to 8 plain strings, one per option"
+
+
+def _scout_session(client) -> str:
+    return client.tool("navigator_start", {"mode": "scout", "goal": "g", "context": ""}, META)["structuredContent"]["result"]
+
+
+def test_settle_without_options_is_refused_on_the_queued_path(client):
+    session_id = _scout_session(client)
+    reply = client.tool("navigator_ask", {"session_id": session_id, "question": "Which?", "answer_tool": "settle"}, META)
+    assert reply["structuredContent"] == {"status": "error", "reason": NO_OPTIONS_REASON}
+
+
+def test_settle_without_options_is_refused_on_the_tasks_path_with_no_task(client):
+    session_id = _scout_session(client)
+    raw = client.call(
+        "tools/call",
+        {"name": "navigator_ask", "arguments": {"session_id": session_id, "question": "Which?", "answer_tool": "settle"}, "_meta": OPT_IN},
+    )
+    assert "taskId" not in raw
+    assert raw["structuredContent"] == {"status": "error", "reason": NO_OPTIONS_REASON}
+
+
+def test_settle_with_options_is_queued_on_the_queued_path(client):
+    session_id = _scout_session(client)
+    reply = client.tool(
+        "navigator_ask",
+        {"session_id": session_id, "question": "Which?", "answer_tool": "settle", "options": ["JSON file", "SQLite database"]},
+        META,
+    )
+    assert reply["structuredContent"]["status"] == "queued"
