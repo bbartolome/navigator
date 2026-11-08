@@ -55,17 +55,36 @@ Answer by calling settle.
 The empty-reply retry replays `ask_parts["question"]`, which already holds the legend, so the retry sees the same
 labels.
 
-**Refusals on `navigator_ask`.** Checked in `navigator_ask` (`server.py:116-125`) before `enqueue_queued`, not as a
-pydantic validator on `AskArgs`, so they come back as `{"status": "error", "reason": ...}`, the same shape
-`enqueue_queued` returns. One function, `scout.check_options(answer_tool, options) -> str | None`, does the checks.
-`navigator_ask` calls it, and `_ask` calls it again, so a direct `ask()` call (as the tests make) is refused the same
-way and a `settle` ask with no options is never sent to the navigator. The messages:
+**Refusals on `settle` asks.** Checked in `JobManager._enqueue_locked` (`jobs.py:162`) for `kind == "ask"`, by
+`scout.check_options(answer_tool, options)`, which raises `ValueError(message)`. Both paths turn that into
+`{"status": "error", "reason": ...}`:
+
+- the queued fallback, through `enqueue_queued` (`jobs.py:188-189`);
+- the Tasks path, where `TasksExtension.intercept_tool_call` calls `enqueue` directly and, on `ValueError`, falls through
+  to the `navigator_ask` body (`jobs.py:528-529`), which reaches the same `enqueue_queued` path.
+
+`navigator_ask` does not check on its own. `_ask` calls `check_options` as well, for direct `ask()` calls (as the tests
+make). `check_options` raises `ValueError`, and `_ask` catches it and returns `_err(str(exc))`, an `Error` outcome. That
+happens before any state change, next to the phase gates (`ollama.py:607-611`). `ask()` (`ollama.py:589-597`) catches only
+`TransportFailure` and `ImageError`, so without this catch the error would raise rather than return an outcome. A
+`settle` ask with no options never reaches the navigator. Not a pydantic validator on `AskArgs`: that would surface as a
+raw tool error.
+
+Import: `ollama.py` imports `check_options` inside `_ask`, not at module level. `modes/scout.py` and `modes/__init__.py`
+both import `ollama`, so a top-level import would be circular. `jobs.py` already imports `modes`, so its call is fine.
+
+The messages:
 
 - `settle` with no `options`: `settle needs options: 2 to 8 plain strings, one per option`
 - `settle` with 1 or more than 8 entries: `options: 2 to 8 entries; got 1`
 - An entry that is empty after collapse: `options: entry 2 is empty`
 - Two entries with the same collapsed text: `options: entries 1 and 3 have the same text`
 - `options` with any tool other than `settle`: `options is only used with answer_tool settle`
+
+**Answered result.** The `result` of an answered `settle` carries `options` (label to collapsed text) next to
+`next_question_id`, so the driver has each label's text when the answer arrives. `apply_answer` returns
+`{**args, "next_question_id": ..., "options": <ask_options>}`. The driver needs the text for the fit check in step 6 and
+the summary in step 8, and the labels alone do not carry it.
 
 **Stored and rendered answer.** `SettledAnswer` gains two optional fields, both defaulting so old state files load:
 
@@ -173,9 +192,18 @@ Second round:
   followed by `:`) bounce with a message that shows the correct form. The reserved-name bounce suppresses the
   missing-option message.
 - The `case_against` message is in one place, the `Other` message, so no two messages cover the same case.
-- The refusal check lives in `navigator_ask`, shared with `_ask` through `scout.check_options`. It is not a pydantic
-  validator, and it refuses a `settle` ask with no options before any call to the navigator.
+- Superseded by the third round below: the refusal check does not live in `navigator_ask`.
 - The Q2 golden line is written out in full.
+
+Third round:
+
+- The refusal check moved to `JobManager._enqueue_locked` (`jobs.py:162`), so the Tasks path is covered. The Tasks
+  path calls `enqueue` and falls through to the tool body on `ValueError`, so both paths return the same error dict.
+  `navigator_ask` does not check on its own.
+- `_ask` catches the `ValueError` from `check_options` and returns `_err(str(exc))`, before any state change. This is
+  specified, not left open.
+- `ollama.py` imports `check_options` inside `_ask`, to avoid the circular import.
+- The answered `result` carries `options`, so the driver reads each label's text (see "Answered result").
 
 - Golden files: g3 is kept as the old-form check, and g4 is rewritten, with its exact lines.
 - Extra non-option alternatives are allowed, named in words, and cannot be chosen. Reason: the charter asks for them, and
