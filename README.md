@@ -14,6 +14,7 @@ questions. Claude reaches the navigator only through `navigator_*` MCP tools, ne
 ## Requirements
 
 - An Ollama server reachable at `NAVIGATOR_OLLAMA_URL`, with the `NAVIGATOR_MODEL` model loaded.
+- With `NAVIGATOR_PROVIDER=anthropic`, the navigator needs Claude API credentials and no Ollama server.
 - `uv` on the PATH is recommended. Without it, the launcher falls back to a pip-based virtualenv.
 
 ## Install
@@ -42,19 +43,26 @@ claude plugin install navigator@navigator --scope user
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `NAVIGATOR_OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama endpoint |
-| `NAVIGATOR_MODEL` | `qwen-agent:latest` | Navigator model |
+| `NAVIGATOR_PROVIDER` | unset | `ollama` or `anthropic`. Unset or empty means `ollama`; any other value fails each job |
+| `NAVIGATOR_OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama endpoint. The `anthropic` provider does not read it |
+| `NAVIGATOR_MODEL` | `qwen-agent:latest` for `ollama`; `claude-opus-5-5` for `anthropic` | Navigator model |
+| `ANTHROPIC_API_KEY` | unset | Claude API key. The `anthropic` provider reads it; the SDK also reads other sources, such as an `ant auth login` profile |
 | `NAVIGATOR_STATE_DIR` | `$CLAUDE_PLUGIN_DATA/sessions` | Session state; required when `CLAUDE_PLUGIN_DATA` is unset |
 | `NAVIGATOR_JOB_TIMEOUT` | unset (no deadline) | Job deadline in seconds. The server also takes `--job-timeout <s>` |
-| `NAVIGATOR_503_RETRIES` | `8` | Retries when Ollama answers 503 |
+| `NAVIGATOR_503_RETRIES` | `8` | Retries when Ollama answers 503, or when the Claude API answers 429, 503 or 529 |
 | `NAVIGATOR_COMPRESSION` | `off` | `on` compresses summaries with LLMLingua-2 |
 | `NAVIGATOR_COMPRESSION_RATE` | `0.33` | Compression rate, in (0, 1] |
 | `NAVIGATOR_LLMLINGUA_MODEL` | `microsoft/llmlingua-2-xlm-roberta-large-meetingbank` | Compression model |
 | `NAVIGATOR_UV_VERSION` | `0.13.6` | uv version the launcher installs when uv is missing; set in `mcp/navigator.json` |
 
-`NAVIGATOR_MODEL` and `NAVIGATOR_OLLAMA_URL` are server-wide. The server reads them when a job starts its Ollama
-client, so a change takes effect after the server restarts. They are not per session or per call. Set them in the
-`env` block of `mcp/navigator.json`, or export them in the shell before starting `claude`.
+`NAVIGATOR_PROVIDER`, `NAVIGATOR_MODEL` and `NAVIGATOR_OLLAMA_URL` are server-wide. The server reads them when a job
+starts its navigator client, so a change takes effect after the server restarts. They are not per session or per call.
+Set them in the `env` block of `mcp/navigator.json`, or export them in the shell before starting `claude`.
+
+With the `anthropic` provider, the navigator sends excerpts, summaries and tool results to the Claude API. Export
+`ANTHROPIC_API_KEY` in the shell before starting `claude`, not in the `env` block of `mcp/navigator.json`. With no
+`NAVIGATOR_JOB_TIMEOUT`, the SDK applies a 600 s read timeout to each request, and `NAVIGATOR_MODEL=claude-opus-4-0` or
+`claude-opus-4-1` fails every job; set `NAVIGATOR_JOB_TIMEOUT` to use them.
 
 Compression is off by default. Turning it on requires the `compression` extra (see Development).
 

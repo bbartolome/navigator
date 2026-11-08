@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[2]
 def test_plugin_manifest_names_the_plugin():
     manifest = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
     assert manifest["name"] == "navigator"
-    assert manifest["version"] == "0.1.1"
+    assert manifest["version"] == "0.1.2"
     assert manifest["author"] == {"name": "Ben B"}
 
 

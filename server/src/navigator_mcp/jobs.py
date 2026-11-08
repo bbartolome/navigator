@@ -119,7 +119,7 @@ class JobManager:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Any] = anyio.sleep,
         backoff_sleep: Callable[[float], Any] | None = None,
-        client_factory: Callable[[], ollama.OllamaClient] | None = None,
+        client_factory: Callable[[], ollama.NavigatorClient] | None = None,
         mode_for: Callable[[str], Any] | None = None,
         max_503_retries: int = 8,
     ):
@@ -241,8 +241,14 @@ class JobManager:
         job.snapshot = state.model_copy(deep=True)
         job.files_before = self._audit_names(job.session_id)
         self._write_job_file(job)
+        try:
+            client = self._client_factory()
+        except Exception as exc:  # a bad NAVIGATOR_PROVIDER or credentials fail this job, not the worker (plan D1)
+            self._rollback(job)
+            self._finish(job, "failed", failure=str(exc) or type(exc).__name__)
+            return
         rt = ollama.Runtime(
-            client=self._client_factory(),
+            client=client,
             mode=self._mode_for(state.mode),
             on_stage=lambda stage: self._on_stage(job, stage),
             deadline_remaining=lambda: self._remaining(job),
@@ -449,11 +455,20 @@ def _write_result(job_id: str, state: str, outcome: Outcome | None, failure: str
     )
 
 
-def _env_client() -> ollama.OllamaClient:
-    return ollama.OllamaClient(
-        os.environ.get("NAVIGATOR_OLLAMA_URL", "http://host.docker.internal:11434"),
-        os.environ.get("NAVIGATOR_MODEL", "qwen-agent:latest"),
-    )
+def _env_client() -> ollama.NavigatorClient:
+    """The client NAVIGATOR_PROVIDER selects (phase 7 section 3). Other values raise: no fallback to Ollama."""
+    raw = os.environ.get("NAVIGATOR_PROVIDER", "")
+    provider = raw.strip().lower()
+    if provider in ("", "ollama"):
+        return ollama.OllamaClient(
+            os.environ.get("NAVIGATOR_OLLAMA_URL", "http://host.docker.internal:11434"),
+            os.environ.get("NAVIGATOR_MODEL", "qwen-agent:latest"),
+        )
+    if provider == "anthropic":
+        from .anthropic_client import AnthropicClient  # here, so the Ollama path never loads the SDK (plan D18)
+
+        return AnthropicClient(os.environ.get("NAVIGATOR_MODEL", "claude-opus-5-5"))
+    raise ValueError(f"NAVIGATOR_PROVIDER must be ollama or anthropic, not '{provider}'")
 
 
 def _opted_in(ctx: Any) -> bool:

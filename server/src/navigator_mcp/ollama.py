@@ -136,8 +136,21 @@ class Mode(Protocol):
     def carry_forward(self, args: dict) -> list[str]: ...
 
 
+class NavigatorClient(Protocol):
+    name: str  # "ollama" or "anthropic"
+    model: str
+
+    def build_request(self, messages: list[dict], tools: list[dict], *, redact_images: bool = False) -> bytes: ...
+
+    async def post(self, body: bytes, timeout: httpx.Timeout | None = None) -> httpx.Response: ...
+
+    async def aclose(self) -> None: ...
+
+
 class OllamaClient:
     """POST /api/chat. The timeout is None by default (main doc section 8); the job layer passes a deadline later."""
+
+    name = "ollama"
 
     def __init__(self, base_url: str, model: str, *, transport: httpx.AsyncBaseTransport | None = None):
         self.model = model
@@ -148,7 +161,10 @@ class OllamaClient:
         return self._http.timeout
 
     def build_request(self, messages: list[dict], tools: list[dict], *, redact_images: bool = False) -> bytes:
-        msgs = [_redact(m) for m in messages] if redact_images else messages
+        # navigator_* keys are for the session file and other providers; Ollama never sees them (phase 7 section 6.2)
+        msgs = [{k: v for k, v in m.items() if not k.startswith("navigator_")} for m in messages]
+        if redact_images:
+            msgs = [_redact(m) for m in msgs]
         return canonical_json({"messages": msgs, "model": self.model, "stream": False, "tools": tools})
 
     async def post(self, body: bytes, timeout: httpx.Timeout | None = None) -> httpx.Response:
@@ -165,7 +181,7 @@ class OllamaClient:
 class Runtime:
     """What the loop needs: the client and mode, plus the job hooks (phase 3b section 1). Defaults mean no job."""
 
-    client: OllamaClient
+    client: NavigatorClient
     mode: Mode
     on_stage: Callable[[str], None] = lambda stage: None
     deadline_remaining: Callable[[], float | None] = lambda: None
@@ -377,7 +393,7 @@ async def _post(state: S.SessionState, rt: Runtime, body: bytes, redacted: bytes
             raise TransportFailure(reason) from exc
         if resp.status_code == 503:
             if attempt >= rt.max_503_retries:
-                raise Busy503(f"ollama busy (503): {resp.text[:500]}")
+                raise Busy503(f"{rt.client.name} busy (503): {resp.text[:500]}")
             delay = BACKOFF[min(attempt, len(BACKOFF) - 1)]
             if remaining is not None:
                 delay = min(delay, remaining)
@@ -430,6 +446,8 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
             return _settle(state, Error(status="error", reason="timeout", stage=current_stage))
         except Busy503 as exc:
             return _settle(state, Error(status="error", reason=str(exc), stage=current_stage))
+        if isinstance(obj, dict) and isinstance(obj.get("navigator_error"), str):
+            return _settle(state, Error(status="error", reason=obj["navigator_error"], stage=current_stage))
         reply = classify(obj, tool_names)
 
         if reply.kind == "malformed":
@@ -496,12 +514,12 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
             # Missing fields go back as a bounce; the other calls in the reply are ignored.
             state.bounces += 1
             state.messages.append(_received(message))
-            for c in reply.calls:
+            for i, c in enumerate(reply.calls):
                 if c is ans:
                     text = f"{ans.name}: missing or invalid fields: {', '.join(missing)}. Call {ans.name} again with them."
                 else:
                     text = "ignored: the answer tool was called in the same reply"
-                state.messages.append({"role": "tool", "tool_name": c.name, "content": text})
+                state.messages.append({"role": "tool", "tool_name": c.name, "content": text, "navigator_call": i})
             if state.bounces > BOUNCE_CAP:
                 return _settle(state, _err("repeated bounces"))
             continuations, label_continuation = continuations + 1, True
@@ -561,8 +579,8 @@ async def _loop(state: S.SessionState, rt: Runtime) -> Outcome:
         if state.bounces > BOUNCE_CAP:
             return _settle(state, _err("repeated bounces"))
         if not survivors:
-            for p in pending:
-                state.messages.append({"role": "tool", "tool_name": p.name, "content": p.bounce})
+            for i, p in enumerate(pending):
+                state.messages.append({"role": "tool", "tool_name": p.name, "content": p.bounce, "navigator_call": i})
             continuations, label_continuation = continuations + 1, True
             continue
         state.pending = pending
@@ -685,13 +703,16 @@ async def _submit(state: S.SessionState, args: SubmitArgs, rt: Runtime) -> Outco
     by_id = {r.call_id: r for r in args.results}
     images = {r.call_id: _encode_image(r.image_path) for r in args.results if r.image_path}  # may raise ImageError
 
-    for p in pending:  # bounce messages come before the real results, in call order
+    # bounce messages come before the real results, in call order; navigator_call is the index in pending (D11)
+    for i, p in enumerate(pending):
         if p.bounce is not None:
-            state.messages.append({"role": "tool", "tool_name": p.name, "content": p.bounce})
-    for p in survivors:
+            state.messages.append({"role": "tool", "tool_name": p.name, "content": p.bounce, "navigator_call": i})
+    for i, p in enumerate(pending):
+        if p.bounce is not None:
+            continue
         r = by_id[p.call_id]
         content = r.content if r.status == "ran" else f"DENIED: {r.content}"
-        state.messages.append({"role": "tool", "tool_name": p.name, "content": content})
+        state.messages.append({"role": "tool", "tool_name": p.name, "content": content, "navigator_call": i})
     for p in survivors:
         if p.call_id in images:
             state.messages.append({"role": "user", "content": f"{p.call_id} image", "images": [images[p.call_id]]})

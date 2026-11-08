@@ -7,6 +7,7 @@ ask_n, and a fourth bounced call ends the ask.
 import base64
 import json
 import re
+from pathlib import Path
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ import pytest
 from fakes import Status, decide, call, calls, empty, FakeOllama, plain, runtime
 from navigator_mcp import session as S
 from navigator_mcp.ollama import (
+    BOUNCE_CAP,
     Answered,
     AskArgs,
     Error,
@@ -29,6 +31,7 @@ from navigator_mcp.ollama import (
 
 pytestmark = pytest.mark.anyio
 
+GOLDEN = Path(__file__).parent / "golden"
 QUESTION = "Which module owns retries?"
 
 
@@ -457,3 +460,44 @@ async def test_ask_and_submit_guard_phases():
     assert (await ask(st, _ask(), rt)).reason == "session awaiting submit"
     st.phase = "IDLE"
     assert (await submit(st, _submit(_ran("call-0001")), rt)).reason == "session not awaiting submit"
+
+
+# Phase 7 test 5: the Ollama request bytes carry no navigator_call key and are the same as before phase 7
+
+
+async def _g5_sends() -> tuple[list[bytes], S.SessionState]:
+    """One ask that reaches the three navigator_call sites with 3 bounces (the cap allows 3), then one submit.
+
+    Send 1 carries the answer-tool bounce, send 2 the no-survivor bounce, send 3 the _submit bounce and result.
+    """
+    fake = FakeOllama(
+        [
+            # answer-tool bounce: decide lacks carry_forward, read_file is ignored (bounces 1)
+            calls(("read_file", {"path": "a", "justification": "j1"}), ("decide", {"decision": "x"})),
+            # no survivor: one call with no justification (bounces 2)
+            call("read_file", path="b"),
+            # mixed: the first call has no justification, the second survives (bounces 3)
+            calls(("read_file", {"path": "c"}), ("read_file", {"path": "d", "justification": "j2"})),
+            decide(decision="x", carry_forward=[]),
+        ]
+    )
+    st = _state()
+    rt = runtime(fake)
+    first = await ask(st, _ask(), rt)
+    assert isinstance(first, ToolCalls)
+    assert [c.call_id for c in first.calls] == ["call-0003"]
+    out = await submit(st, _submit(_ran("call-0003", "d body")), rt)
+    assert isinstance(out, Answered)
+    assert st.bounces == BOUNCE_CAP
+    return fake.requests, st
+
+
+async def test_p7_05_ollama_request_bytes_match_golden_and_have_no_navigator_call():
+    requests, st = await _g5_sends()
+    assert len(requests) == 4
+    for i, body in enumerate(requests):
+        assert body == (GOLDEN / f"g5_ollama_navigator_call_{i}.json").read_bytes(), f"send {i}"
+        assert b"navigator_call" not in body, f"send {i}"
+    # The state has the key, so the strip is exercised. The result's index is its place in pending, not in survivors.
+    tool_msgs = [(m["tool_name"], m["navigator_call"]) for m in st.messages if m["role"] == "tool"]
+    assert tool_msgs == [("read_file", 0), ("decide", 1), ("read_file", 0), ("read_file", 0), ("read_file", 1)]
