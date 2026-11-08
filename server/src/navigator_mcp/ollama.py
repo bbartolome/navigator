@@ -99,6 +99,7 @@ class AskArgs(BaseModel):
     answer_tool: str
     excerpts: list[Excerpt] = []
     images: list[str] = []  # image paths
+    options: list[str] = []  # phase 5b: driver-supplied options for a settle ask; empty otherwise
 
 
 class Result(BaseModel):

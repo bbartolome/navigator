@@ -115,6 +115,15 @@ class ScoutQuestion(_M):
     why_it_matters: str = ""
 
 
+class OtherAnswer(_M):
+    """The best alternative the navigator found itself, for a decision of Other (phase 5b section 6)."""
+
+    summary: str
+    case_for: str
+    case_against: str
+    backwards_compatible: bool
+
+
 class SettledAnswer(_M):
     question_id: str
     question: str
@@ -122,6 +131,9 @@ class SettledAnswer(_M):
     decision: str
     reasoning: str
     complexity_justification: str | None = None
+    # phase 5b: both optional, so state written before options existed still loads
+    options: dict[str, str] = {}  # label to collapsed option text, for the ask that settled the question
+    other: OtherAnswer | None = None
 
 
 class SessionState(_M):
@@ -161,6 +173,8 @@ class SessionState(_M):
     pending: list[PendingCall] | None = None
     messages: list[dict[str, Any]] = []  # the current ask's Ollama messages, append-only within the ask
     ask_parts: dict[str, Any] | None = None  # summary, excerpts, question and answer tool, for the empty-reply retry
+    # phase 5b: label to collapsed option text for the current settle ask; None for other asks; never rendered
+    ask_options: dict[str, str] | None = None
     metrics: MetricsTotals = Field(default_factory=MetricsTotals)
 
 
