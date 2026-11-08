@@ -10,8 +10,8 @@ WEB SEARCHES: (none)
 SHOTS: (none)
 ACTION LOG: (none)
 SETTLED ANSWERS:
-- Q1: JSON or SQLite? | decision: JSON | reasoning: simplest, additive later | alternatives: JSON (for: no deps; against: no queries); SQLite (for: queries; against: new dep)
-- Q2: Where is state stored? | decision: per-session dir | reasoning: matches the state.json layout | alternatives: one file (for: simple; against: no concurrency); per-session dir (for: isolation; against: more files)
+- Q1: JSON or SQLite? | decision: A: JSON file | reasoning: simplest, additive later | alternatives: A: JSON file (for: no deps; against: no queries); B: SQLite database (for: queries; against: new dep)
+- Q2: Where is state stored? | decision: Other: a shared directory outside the repo | reasoning: matches the state.json layout | alternatives: A: one file (for: simple; against: no concurrency); B: per-session dir (for: isolation; against: more files)
 OPEN QUESTIONS:
 - Q3: Is the format versioned?
 OPEN CHALLENGE: (none)

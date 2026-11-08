@@ -79,12 +79,26 @@ def _stable_lines(s: SessionState, transform: TextTransform | None) -> list[str]
     return lines
 
 
+def _decision_text(a) -> str:
+    """Phase 5b section 7: a label prints with its option text, Other with its summary. An old answer prints as it is."""
+    if a.decision == "Other" and a.other is not None:
+        return f"Other: {_value(a.other.summary)}"
+    if a.decision in a.options:
+        return f"{a.decision}: {_value(a.options[a.decision])}"
+    return _value(a.decision)
+
+
+def _alternative_name(a, name: str) -> str:
+    return f"{name}: {_value(a.options[name])}" if name in a.options else _value(name)
+
+
 def _settled_line(a) -> str:
     alts = "; ".join(
-        f"{_value(x.name)} (for: {_value(x.case_for)}; against: {_value(x.case_against)})" for x in a.alternatives
+        f"{_alternative_name(a, x.name)} (for: {_value(x.case_for)}; against: {_value(x.case_against)})"
+        for x in a.alternatives
     ) or "(none)"
     return (
-        f"{_value(a.question_id)}: {_value(a.question)} | decision: {_value(a.decision)}"
+        f"{_value(a.question_id)}: {_value(a.question)} | decision: {_decision_text(a)}"
         f" | reasoning: {_value(a.reasoning)} | alternatives: {alts}"
     )
 

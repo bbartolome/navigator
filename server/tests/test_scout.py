@@ -253,8 +253,8 @@ def test_17_summary_with_two_settled_answers_and_one_pending_matches_golden():
     st.scout_phase = "settling"
     st.questions = [S.ScoutQuestion(id="Q1", question="JSON or SQLite?"), S.ScoutQuestion(id="Q2", question="Where is state stored?"), S.ScoutQuestion(id="Q3", question="Is the format versioned?")]
     st.settled_answers = [
-        S.SettledAnswer(question_id="Q1", question="JSON or SQLite?", alternatives=[S.Alternative(name="JSON", case_for="no deps", case_against="no queries"), S.Alternative(name="SQLite", case_for="queries", case_against="new dep")], decision="JSON", reasoning="simplest, additive later"),
-        S.SettledAnswer(question_id="Q2", question="Where is state stored?", alternatives=[S.Alternative(name="one file", case_for="simple", case_against="no concurrency"), S.Alternative(name="per-session dir", case_for="isolation", case_against="more files")], decision="per-session dir", reasoning="matches the state.json layout"),
+        S.SettledAnswer(question_id="Q1", question="JSON or SQLite?", options={"A": "JSON file", "B": "SQLite database"}, alternatives=[S.Alternative(name="A", case_for="no deps", case_against="no queries"), S.Alternative(name="B", case_for="queries", case_against="new dep")], decision="A", reasoning="simplest, additive later"),
+        S.SettledAnswer(question_id="Q2", question="Where is state stored?", options={"A": "one file", "B": "per-session dir"}, alternatives=[S.Alternative(name="A", case_for="simple", case_against="no concurrency"), S.Alternative(name="B", case_for="isolation", case_against="more files")], decision="Other", reasoning="matches the state.json layout", other=S.OtherAnswer(summary="a shared directory outside the repo", case_for="shared", case_against="more files", backwards_compatible=True)),
     ]
     text = render_summary(st)
     assert text == (GOLDEN / "g4_scout_two_settled.txt").read_text()

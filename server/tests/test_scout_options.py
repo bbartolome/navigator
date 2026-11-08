@@ -79,3 +79,64 @@ def test_ask_args_options_default_to_an_empty_list():
 def test_ask_args_keeps_the_options_it_is_given():
     args = AskArgs(question="Which?", answer_tool="settle", options=["JSON file", "SQLite database"])
     assert args.options == ["JSON file", "SQLite database"]
+
+
+# Task 2: the SETTLED ANSWERS line (section 7). Option text is shown, so the summary reads without the legend.
+
+from navigator_mcp.render import _settled_line  # noqa: E402
+
+
+def _answer(**overrides) -> S.SettledAnswer:
+    fields = dict(
+        question_id="Q1",
+        question="JSON or SQLite?",
+        alternatives=[
+            S.Alternative(name="A", case_for="no deps", case_against="no queries"),
+            S.Alternative(name="B", case_for="queries", case_against="new dep"),
+        ],
+        decision="A",
+        reasoning="simplest",
+        options={"A": "JSON file", "B": "SQLite database"},
+    )
+    fields.update(overrides)
+    return S.SettledAnswer(**fields)
+
+
+def test_label_decision_prints_its_option_text_and_each_alternative_with_text():
+    assert _settled_line(_answer()) == (
+        "Q1: JSON or SQLite? | decision: A: JSON file | reasoning: simplest"
+        " | alternatives: A: JSON file (for: no deps; against: no queries); B: SQLite database (for: queries; against: new dep)"
+    )
+
+
+def test_other_decision_prints_the_summary_and_not_the_found_alternative_case():
+    answer = _answer(
+        decision="Other",
+        alternatives=[S.Alternative(name="A", case_for="no deps", case_against="no queries")],
+        other=S.OtherAnswer(summary="a shared directory", case_for="one writer at a time", case_against="collisions", backwards_compatible=True),
+    )
+    line = _settled_line(answer)
+    assert "| decision: Other: a shared directory |" in line
+    assert "one writer at a time" not in line and "collisions" not in line  # the found alternative's case is not printed
+
+
+def test_extra_alternative_prints_its_name_as_it_is():
+    answer = _answer(alternatives=[
+        S.Alternative(name="A", case_for="no deps", case_against="no queries"),
+        S.Alternative(name="SQLite", case_for="queries", case_against="new dep"),
+    ])
+    assert "; SQLite (for: queries; against: new dep)" in _settled_line(answer)
+
+
+def test_old_answer_with_no_options_prints_exactly_as_before():
+    old = S.SettledAnswer(
+        question_id="Q1",
+        question="JSON or SQLite?",
+        alternatives=[S.Alternative(name="JSON", case_for="no deps", case_against="no queries"), S.Alternative(name="SQLite", case_for="queries", case_against="new dep")],
+        decision="JSON",
+        reasoning="simplest, additive later",
+    )
+    assert _settled_line(old) == (
+        "Q1: JSON or SQLite? | decision: JSON | reasoning: simplest, additive later"
+        " | alternatives: JSON (for: no deps; against: no queries); SQLite (for: queries; against: new dep)"
+    )
