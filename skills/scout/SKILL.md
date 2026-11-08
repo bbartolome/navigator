@@ -34,8 +34,16 @@ call `navigator_status` in a loop.
 
    On a record error, read the message, which names the fix, and retry once.
 
-3. Settle one question per `navigator_ask`, `answer_tool="settle"`, in list order. Give the question and the
-   excerpts it needs. Offer options without a preference.
+3. Settle one question per `navigator_ask`, `answer_tool="settle"`, in list order. Pass the question, the excerpts it
+   needs, and `options`: 2 to 8 plain strings, ordered with no preference and free of labels. Do not list the options or
+   any labels in the question text; the server appends them. Every `settle` ask for the same question, including a
+   re-ask after `need_info` or a challenge, passes the same `options` in the same order. To change an option, stop and
+   ask the user through AskUserQuestion.
+   - Each string is a complete choice that reads without the question, not "the first one" or "option 2".
+   - No labels, no `Other`, and no "recommended" or "default" marking. Never put the option you lean toward first.
+   - Include up to eight options. If you have more, merge near-duplicates first, then keep the eight most plausible.
+     The navigator still surveys the rest as extra alternatives, named in words.
+   - A question with one real option gets two: add the status quo or the simplest alternative as the second.
 
 4. Run or deny every tool call in an outcome with `status="tool_calls"`, then send the results with
    `navigator_submit`.
@@ -45,28 +53,40 @@ call `navigator_status` in a loop.
    - Look at each screenshot before submitting it and withhold any that shows a secret.
 
 5. On `status="need_info"`, answer each listed fact from verified sources only, never guess on the navigator's
-   behalf, then ask the same question again.
+   behalf, then ask the same question again with the same `options`, in the same order (step 3).
 
 6. Check each `settle` result against the source before accepting it. Challenge, citing the evidence, if
    - alternatives were not surveyed or a plausible one is missing,
    - a case for or against is uncited or wrong,
-   - the decision is not the simplest backwards-compatible option and no `complexity_justification` explains why.
-   Send a challenge in its own turn: record it with `navigator_record(kind="challenge")`, then ask again with
-   `settle`. Check each carry-forward line against the source and record the verdict with
+   - the decision is not the simplest backwards-compatible option and no `complexity_justification` explains why,
+   - the decision is `Other` and an option fits the question, or a citation in `other` or in an option's `case_against`
+     is wrong (the server does not judge fit).
+   The answered result carries `options` (label to text), so the fit check compares each option's text, not its label.
+   `Other` is not challenged automatically: it gets the same review as a label decision. An extra alternative gets the
+   same citation check as any alternative.
+   Send a challenge in its own turn: record it with `navigator_record(kind="challenge")`, then ask again with `settle`,
+   with the same `options` in the same order (step 3). A challenge names an option by its text, not by its label alone,
+   because the driver never writes a label. For example: "the option 'SQLite database' fits the question". Check each
+   carry-forward line against the source and record the verdict with
    `navigator_record(kind="carry_forward_verdict")`; record wrong claims as `rejected_claim` with evidence. A challenge
    payload is `{text}` only; the question is the current one. If a challenge goes back and forth without the navigator
    moving, ask the user through AskUserQuestion.
 
 7. Report each `answered` outcome to the user in one line.
 
-8. When every question is settled, show the user a summary per question in this form:
+8. When every question is settled, show the user a summary per question in this form. Option labels and `Other` appear
+   with their text, so the user never sees a bare label. Take each question's option text from the `options` field of
+   its answered result. Keep each answered result from step 7 until this step.
 
    ```
    ## <question id>: <question>
-   Alternatives: <name> (for: ...; against: ...) | <name> (...) | ...
-   Decision: <decision>
+   Alternatives: A: <text> (for: ...; against: ...) | B: <text> (for: ...; against: ...) | <extra name> (for: ...; against: ...) | Other: <summary> (for: ...; against: ...)
+   Decision: <label>: <option text>        (or: Decision: Other: <summary>)
    Reasoning: <reasoning>
    ```
+
+   The `Other` entry in `Alternatives` appears only when the decision is `Other`, and its `for` and `against` come from
+   the `other` object. Extra entries appear by name.
 
    Then call `navigator_end` and ask through AskUserQuestion with three options:
    - Approve
