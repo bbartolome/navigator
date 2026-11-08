@@ -263,3 +263,248 @@ async def test_a_non_settle_ask_clears_ask_options():
     out = await ask(st, AskArgs(question="Which questions?", answer_tool="agree_questions"), runtime(fake, SCOUT))
     assert isinstance(out, Answered)
     assert st.ask_options is None
+
+
+# Task 4: the settle schema and the server checks on a settle reply (sections 4, 5 and 6)
+
+from navigator_mcp.modes.scout import SETTLE_TOOL  # noqa: E402
+
+
+def _entry(name, against="no queries", compat=True):
+    return {"name": name, "case_for": "no deps", "case_against": against, "backwards_compatible": compat}
+
+
+def _other(**over):
+    o = {"summary": "a shared directory", "case_for": "one place", "case_against": "collisions", "backwards_compatible": True}
+    o.update(over)
+    return o
+
+
+def _args(decision="A", alternatives=None, other=None, **extra):
+    args = {
+        "question_id": "q1",
+        "alternatives": alternatives if alternatives is not None else [_entry("A"), _entry("B", "new dep")],
+        "decision": decision,
+        "reasoning": "simplest",
+        "carry_forward": [],
+    }
+    if other is not None:
+        args["other"] = other
+    args.update(extra)
+    return args
+
+
+def _checks(args, labels=None):
+    st = _settling_state()
+    st.ask_options = option_texts(labels or SETTLE_OPTIONS)
+    return SCOUT.missing_fields("settle", args, st)
+
+
+OTHER_REQUIRED = (
+    "other (required when decision is Other, with non-empty summary, case_for and case_against, "
+    "and a boolean backwards_compatible)"
+)
+COMPLEXITY = "complexity_justification (required when the chosen alternative is not backwards compatible)"
+
+
+def test_a_valid_label_decision_passes():
+    assert _checks(_args()) == []
+
+
+def test_a_decision_that_is_not_a_label_is_refused_naming_the_labels():
+    assert "decision (must be one of: A, B, Other; got 'E')" in _checks(_args(decision="E"))
+
+
+def test_decision_is_case_sensitive_so_lowercase_other_is_refused():
+    assert "decision (must be one of: A, B, Other; got 'other')" in _checks(_args(decision="other"), labels=None)
+
+
+def test_a_missing_decision_is_refused_with_no_value():
+    args = _args()
+    del args["decision"]
+    assert "decision (must be one of: A, B, Other; got no value)" in _checks(args)
+
+
+def test_decision_is_compared_after_strip():
+    assert _checks(_args(decision=" A ")) == []
+
+
+def test_the_labels_in_the_decision_message_follow_the_ask():
+    three = [_entry("A"), _entry("B"), _entry("C")]
+    assert _checks(_args(decision="D", alternatives=three), labels=["A", "B", "C"]) == [
+        "decision (must be one of: A, B, C, Other; got 'D')"
+    ]
+
+
+def test_other_without_an_other_object_is_refused():
+    assert OTHER_REQUIRED in _checks(_args(decision="Other", alternatives=[_entry("A"), _entry("B")]))
+
+
+@pytest.mark.parametrize("field, value", [("summary", ""), ("case_for", "   "), ("case_against", ""), ("backwards_compatible", "yes")])
+def test_other_with_an_empty_or_mistyped_field_is_refused(field, value):
+    problems = _checks(_args(decision="Other", alternatives=[_entry("A"), _entry("B")], other=_other(**{field: value})))
+    assert OTHER_REQUIRED in problems
+
+
+def test_other_with_a_label_decision_is_refused():
+    assert "other (must be omitted unless decision is Other)" in _checks(_args(other=_other()))
+
+
+def test_other_null_counts_as_omitted_for_a_label_decision():
+    assert _checks(_args(other=None)) == []
+    args = _args()
+    args["other"] = None
+    assert _checks(args) == []
+
+
+def test_a_valid_other_decision_passes_and_needs_an_entry_for_every_option():
+    assert _checks(_args(decision="Other", alternatives=[_entry("A"), _entry("B")], other=_other())) == []
+    assert "alternatives (missing options: B)" in _checks(_args(decision="Other", alternatives=[_entry("A")], other=_other()))
+
+
+def test_a_missing_option_is_named():
+    assert "alternatives (missing options: B)" in _checks(_args(alternatives=[_entry("A")]))
+
+
+def test_two_missing_options_are_both_named():
+    assert "alternatives (missing options: B, C)" in _checks(_args(alternatives=[_entry("A")]), labels=["A", "B", "C"])
+
+
+def test_a_duplicate_option_is_refused_and_missing_is_checked_first():
+    assert _checks(_args(alternatives=[_entry("A"), _entry("A")])) == ["alternatives (missing options: B)"]
+    assert "alternatives (duplicate entry for option: A)" in _checks(
+        _args(alternatives=[_entry("A"), _entry("A"), _entry("B")])
+    )
+
+
+def test_an_option_named_with_its_label_and_text_is_refused_as_reserved_with_no_missing_message():
+    problems = _checks(_args(alternatives=[_entry("A: JSON file"), _entry("B")]))
+    assert problems == [
+        "alternatives (name 'A: JSON file' is reserved: name an option by its label alone, such as 'A', "
+        "and name other alternatives without A to H or Other)"
+    ]
+
+
+def test_a_lowercase_label_is_reserved():
+    problems = _checks(_args(alternatives=[_entry("a"), _entry("B")]))
+    assert [p for p in problems if p.startswith("alternatives")] == [
+        "alternatives (name 'a' is reserved: name an option by its label alone, such as 'A', "
+        "and name other alternatives without A to H or Other)"
+    ]
+
+
+def test_an_extra_alternative_named_in_words_is_accepted():
+    assert _checks(_args(alternatives=[_entry("A"), _entry("B"), _entry("SQLite")])) == []
+
+
+def test_an_extra_named_with_a_reserved_label_is_refused():
+    assert any("is reserved" in p for p in _checks(_args(alternatives=[_entry("A"), _entry("B"), _entry("E")])))
+
+
+def test_an_empty_case_against_is_refused_for_an_option_and_for_an_extra():
+    assert "alternatives (case_against is empty for 'A')" in _checks(_args(alternatives=[_entry("A", against="   "), _entry("B")]))
+    assert "alternatives (case_against is empty for 'SQLite')" in _checks(
+        _args(alternatives=[_entry("A"), _entry("B"), _entry("SQLite", against="")])
+    )
+
+
+def test_an_entry_missing_a_field_is_the_shape_message():
+    bad = {"name": "A", "case_for": "x", "backwards_compatible": True}
+    assert "alternatives (each entry needs name, case_for, case_against and backwards_compatible)" in _checks(
+        _args(alternatives=[bad, _entry("B")])
+    )
+
+
+def test_an_incompatible_label_choice_needs_a_justification():
+    alternatives = [_entry("A"), _entry("B", compat=False)]
+    assert COMPLEXITY in _checks(_args(decision="B", alternatives=alternatives))
+    assert _checks(_args(decision="B", alternatives=alternatives, complexity_justification="needs queries")) == []
+
+
+def test_an_incompatible_other_needs_a_justification_too():
+    other = _other(backwards_compatible=False)
+    assert COMPLEXITY in _checks(_args(decision="Other", alternatives=[_entry("A"), _entry("B")], other=other))
+    assert _checks(
+        _args(decision="Other", alternatives=[_entry("A"), _entry("B")], other=other, complexity_justification="a second store")
+    ) == []
+
+
+def _settle_for(qid, labels=("A", "B"), decision="A", other=None):
+    alternatives = [{"name": x, "case_for": "no deps", "case_against": "no queries", "backwards_compatible": True} for x in labels]
+    args = dict(question_id=qid, alternatives=alternatives, decision=decision, reasoning="simplest", carry_forward=[])
+    if other is not None:
+        args["other"] = other
+    return call("settle", **args)
+
+
+@pytest.mark.anyio
+async def test_an_other_answer_is_stored_with_its_options_and_returned_with_them():
+    st = _settling_state()
+    fake = FakeOllama([_settle_for("q1", decision="Other", other=_other())])
+    out = await ask(st, AskArgs(question="Which?", answer_tool="settle", options=SETTLE_OPTIONS), runtime(fake, SCOUT))
+    assert isinstance(out, Answered)
+    stored = st.settled_answers[0]
+    assert stored.decision == "Other"
+    assert stored.other.summary == "a shared directory"
+    assert stored.options == {"A": "JSON file", "B": "SQLite database"}
+    assert out.result["options"] == {"A": "JSON file", "B": "SQLite database"}
+
+
+@pytest.mark.anyio
+async def test_the_settle_tool_block_is_identical_across_asks_with_different_options():
+    st = _settling_state()
+    st.questions.append(S.ScoutQuestion(id="q2", question="Where is state stored?"))
+    fake = FakeOllama([_settle_for("q1"), _settle_for("q2", labels=("A", "B", "C"))])
+    await ask(st, AskArgs(question="Which?", answer_tool="settle", options=SETTLE_OPTIONS), runtime(fake, SCOUT))
+    await ask(st, AskArgs(question="Where?", answer_tool="settle", options=["one file", "per-session dir", "a database"]), runtime(fake, SCOUT))
+
+    def settle_block(body):
+        tools = json.loads(body)["tools"]
+        return [t for t in tools if t["function"]["name"] == "settle"][0]
+
+    first, second = settle_block(fake.requests[0]), settle_block(fake.requests[1])
+    assert first == second == SETTLE_TOOL
+    assert json.dumps(first) == json.dumps(second)
+
+
+# Task 4 (review fixes): the fixture copies the §4 schema, and the apply_answer model fields
+
+import json as _json  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_FIX = _Path(__file__).parent / "fixtures"
+
+
+def test_scout_tools_fixture_settle_block_is_the_settle_tool_schema():
+    tools = _json.loads((_FIX / "scout_tools.json").read_text())
+    assert tools["settle"] == SETTLE_TOOL
+
+
+def test_an_extra_key_on_other_or_an_alternative_is_dropped_not_bounced():
+    st = _settling_state()
+    st.ask_options = option_texts(SETTLE_OPTIONS)
+    args = _args(
+        decision="Other",
+        alternatives=[dict(_entry("A"), note="extra"), _entry("B")],
+        other=_other(name="extra"),
+    )
+    answer = SCOUT.apply_answer(st, "settle", args)
+    assert answer["next_question_id"] is None
+    stored = st.settled_answers[0]
+    assert stored.other.summary == "a shared directory"
+    assert all(set(a.model_dump()) == {"name", "case_for", "case_against", "backwards_compatible"} for a in stored.alternatives)
+
+
+def test_a_name_with_spaces_is_stored_stripped():
+    st = _settling_state()
+    st.ask_options = option_texts(SETTLE_OPTIONS)
+    SCOUT.apply_answer(st, "settle", _args(alternatives=[_entry(" A "), _entry("B")], decision="A"))
+    assert [a.name for a in st.settled_answers[0].alternatives] == ["A", "B"]
+
+
+def test_a_decision_with_spaces_is_stored_stripped():
+    st = _settling_state()
+    st.ask_options = option_texts(SETTLE_OPTIONS)
+    SCOUT.apply_answer(st, "settle", _args(decision=" A "))
+    assert st.settled_answers[0].decision == "A"
+    assert st.settled_answers[0].options == {"A": "JSON file", "B": "SQLite database"}

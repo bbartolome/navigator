@@ -54,7 +54,7 @@
     "type": "function",
     "function": {
       "name": "settle",
-      "description": "Settle the current question: alternatives surveyed, the decision, the reasoning.",
+      "description": "Settle the current question: the decision, the alternatives surveyed, the reasoning.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -65,11 +65,13 @@
           "alternatives": {
             "type": "array",
             "minItems": 2,
+            "description": "One entry for each option the question offers, named by its label, each with a case for and a case against. Also list any other plausible alternative you surveyed, named in words.",
             "items": {
               "type": "object",
               "properties": {
                 "name": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "An option's label (A, B, and so on), or a short name in words for another alternative you surveyed. A to H and Other are reserved for options."
                 },
                 "case_for": {
                   "type": "string",
@@ -77,7 +79,7 @@
                 },
                 "case_against": {
                   "type": "string",
-                  "description": "Strongest case against, citing path:line or URL."
+                  "description": "Strongest case against, citing path:line or URL. Non-empty."
                 },
                 "backwards_compatible": {
                   "type": "boolean"
@@ -93,14 +95,50 @@
           },
           "decision": {
             "type": "string",
-            "description": "The `name` of the chosen alternative."
+            "enum": [
+              "A",
+              "B",
+              "C",
+              "D",
+              "E",
+              "F",
+              "G",
+              "H",
+              "Other"
+            ],
+            "description": "The label of the chosen option (A, B, and so on), or Other when no option fits. Do not name an alternative in words here."
+          },
+          "other": {
+            "type": "object",
+            "description": "Required only when decision is Other: the best alternative you found yourself, which is not one of the options. Omit it, or send null, for any other decision.",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "case_for": {
+                "type": "string"
+              },
+              "case_against": {
+                "type": "string",
+                "description": "Strongest case against, citing path:line or URL. Non-empty."
+              },
+              "backwards_compatible": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "summary",
+              "case_for",
+              "case_against",
+              "backwards_compatible"
+            ]
           },
           "reasoning": {
             "type": "string"
           },
           "complexity_justification": {
             "type": "string",
-            "description": "Required when the decision is not the simplest backwards-compatible alternative."
+            "description": "Required when the chosen alternative is not backwards compatible."
           },
           "carry_forward": {
             "type": "array",

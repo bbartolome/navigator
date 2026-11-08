@@ -9,7 +9,28 @@ SCOUT_CHARTER = 'You are the NAVIGATOR. You decide; the driver implements. Serve
 # The two answer-tool entries of phase 5 section 4, in the Ollama tools-entry shape.
 AGREE_QUESTIONS_TOOL = {'type': 'function', 'function': {'name': 'agree_questions', 'description': 'Propose the ordered list of questions this session will settle, one per turn.', 'parameters': {'type': 'object', 'properties': {'questions': {'type': 'array', 'minItems': 1, 'maxItems': 12, 'items': {'type': 'object', 'properties': {'id': {'type': 'string', 'description': 'Short unique id, e.g. q1.'}, 'question': {'type': 'string', 'description': 'The decision to be settled, as a question.'}, 'why_it_matters': {'type': 'string', 'description': 'What depends on the answer.'}}, 'required': ['id', 'question', 'why_it_matters']}}, 'carry_forward': {'type': 'array', 'maxItems': 5, 'items': {'type': 'string'}, 'description': 'Up to 5 lines to remember for later questions.'}}, 'required': ['questions', 'carry_forward']}}}
 
-SETTLE_TOOL = {'type': 'function', 'function': {'name': 'settle', 'description': 'Settle the current question: alternatives surveyed, the decision, the reasoning.', 'parameters': {'type': 'object', 'properties': {'question_id': {'type': 'string', 'description': 'Id of the current question.'}, 'alternatives': {'type': 'array', 'minItems': 2, 'items': {'type': 'object', 'properties': {'name': {'type': 'string'}, 'case_for': {'type': 'string', 'description': 'Strongest case for, citing path:line or URL.'}, 'case_against': {'type': 'string', 'description': 'Strongest case against, citing path:line or URL.'}, 'backwards_compatible': {'type': 'boolean'}}, 'required': ['name', 'case_for', 'case_against', 'backwards_compatible']}}, 'decision': {'type': 'string', 'description': 'The `name` of the chosen alternative.'}, 'reasoning': {'type': 'string'}, 'complexity_justification': {'type': 'string', 'description': 'Required when the decision is not the simplest backwards-compatible alternative.'}, 'carry_forward': {'type': 'array', 'maxItems': 5, 'items': {'type': 'string'}, 'description': 'Up to 5 lines to remember for later questions.'}}, 'required': ['question_id', 'alternatives', 'decision', 'reasoning', 'carry_forward']}}}
+# Phase 5b section 4: one constant schema, identical on every ask. The per-ask label set is checked by the server (section 5).
+SETTLE_TOOL = {"type": "function", "function": {"name": "settle",
+  "description": "Settle the current question: the decision, the alternatives surveyed, the reasoning.",
+  "parameters": {"type": "object", "properties": {
+    "question_id": {"type": "string", "description": "Id of the current question."},
+    "alternatives": {"type": "array", "minItems": 2,
+      "description": "One entry for each option the question offers, named by its label, each with a case for and a case against. Also list any other plausible alternative you surveyed, named in words.",
+      "items": {"type": "object", "properties": {
+        "name": {"type": "string", "description": "An option's label (A, B, and so on), or a short name in words for another alternative you surveyed. A to H and Other are reserved for options."},
+        "case_for": {"type": "string", "description": "Strongest case for, citing path:line or URL."},
+        "case_against": {"type": "string", "description": "Strongest case against, citing path:line or URL. Non-empty."},
+        "backwards_compatible": {"type": "boolean"}},
+        "required": ["name", "case_for", "case_against", "backwards_compatible"]}},
+    "decision": {"type": "string", "enum": ["A", "B", "C", "D", "E", "F", "G", "H", "Other"],
+      "description": "The label of the chosen option (A, B, and so on), or Other when no option fits. Do not name an alternative in words here."},
+    "other": {"type": "object", "description": "Required only when decision is Other: the best alternative you found yourself, which is not one of the options. Omit it, or send null, for any other decision.",
+      "properties": {"summary": {"type": "string"}, "case_for": {"type": "string"}, "case_against": {"type": "string", "description": "Strongest case against, citing path:line or URL. Non-empty."}, "backwards_compatible": {"type": "boolean"}},
+      "required": ["summary", "case_for", "case_against", "backwards_compatible"]},
+    "reasoning": {"type": "string"},
+    "complexity_justification": {"type": "string", "description": "Required when the chosen alternative is not backwards compatible."},
+    "carry_forward": {"type": "array", "maxItems": 5, "items": {"type": "string"}, "description": "Up to 5 lines to remember for later questions."}},
+  "required": ["question_id", "alternatives", "decision", "reasoning", "carry_forward"]}}}
 
 _CARRY_MAX = 5
 _AGREE_MAX = 12
@@ -88,6 +109,47 @@ def _valid_alternative(a) -> bool:
     )
 
 
+# Phase 5b section 5: A to H and Other are reserved for options, checked ignoring case; a label followed by ':' is reserved too.
+_RESERVED = ("A", "B", "C", "D", "E", "F", "G", "H", "Other")
+
+
+def _reserved(name: str, labels: list[str]) -> bool:
+    text = name.strip()
+    if text in labels:  # an option's entry is named by its label, so the label itself is never reserved against that option
+        return False
+    low = text.lower()
+    return any(low == r.lower() or low.startswith(r.lower() + ":") for r in _RESERVED)
+
+
+def _valid_other(o) -> bool:
+    return (
+        isinstance(o, dict)
+        and all(isinstance(o.get(k), str) and o[k].strip() != "" for k in ("summary", "case_for", "case_against"))
+        and isinstance(o.get("backwards_compatible"), bool)
+    )
+
+
+def _alternatives_problem(alternatives: list[dict], labels: list[str]) -> str | None:
+    """The first failing alternatives check, in the order of section 5. Only one message is sent for the field."""
+    names = [a["name"].strip() for a in alternatives]
+    for name in names:
+        if _reserved(name, labels):
+            return (
+                f"alternatives (name '{name}' is reserved: name an option by its label alone, such as 'A', "
+                "and name other alternatives without A to H or Other)"
+            )
+    for a in alternatives:
+        if a["case_against"].strip() == "":
+            return f"alternatives (case_against is empty for '{a['name'].strip()}')"
+    missing = [label for label in labels if label not in names]
+    if missing:
+        return f"alternatives (missing options: {', '.join(missing)})"
+    for label in labels:
+        if names.count(label) > 1:
+            return f"alternatives (duplicate entry for option: {label})"
+    return None
+
+
 def _check_settle(args: dict, state: S.SessionState | None) -> list[str]:
     problems = []
     qid = args.get("question_id")
@@ -98,19 +160,38 @@ def _check_settle(args: dict, state: S.SessionState | None) -> list[str]:
         problems.append(f"question_id (unknown question {qid!r})")
     elif qid != current and qid not in settled:
         problems.append(f"question_id ({qid} is not the current question; the current question is {current})")
-    alternatives = args.get("alternatives")
-    if not (isinstance(alternatives, list) and len(alternatives) >= 2 and all(_valid_alternative(a) for a in alternatives)):
-        problems.append("alternatives (at least two, each with name, case_for, case_against and backwards_compatible)")
-        alternatives = []
-    names = [a["name"] for a in alternatives]
+    labels = list((state.ask_options or {}).keys()) if state else []
     decision = args.get("decision")
-    if not isinstance(decision, str) or decision not in names:
-        problems.append("decision (must name one of the alternatives)")
+    chosen_label = decision.strip() if isinstance(decision, str) else None
+    allowed = labels + ["Other"]
+    if chosen_label not in allowed:
+        got = f"'{decision}'" if isinstance(decision, str) else "no value"
+        problems.append(f"decision (must be one of: {', '.join(allowed)}; got {got})")
+    other = args.get("other")
+    if chosen_label in labels and other is not None:  # an absent other and other: null both count as omitted
+        problems.append("other (must be omitted unless decision is Other)")
+    if chosen_label == "Other" and not _valid_other(other):
+        problems.append(
+            "other (required when decision is Other, with non-empty summary, case_for and case_against, "
+            "and a boolean backwards_compatible)"
+        )
+    alternatives = args.get("alternatives")
+    shape_ok = isinstance(alternatives, list) and all(_valid_alternative(a) for a in alternatives)
+    if not shape_ok:
+        problems.append("alternatives (each entry needs name, case_for, case_against and backwards_compatible)")
     else:
-        chosen = next(a for a in alternatives if a["name"] == decision)
-        justification = args.get("complexity_justification")
-        if chosen["backwards_compatible"] is False and not (isinstance(justification, str) and justification.strip()):
-            problems.append("complexity_justification (required when the chosen alternative is not backwards compatible)")
+        problem = _alternatives_problem(alternatives, labels)
+        if problem is not None:
+            problems.append(problem)
+    compatible = None
+    if chosen_label == "Other" and _valid_other(other):
+        compatible = other["backwards_compatible"]
+    elif chosen_label in labels and shape_ok:
+        entry = next((a for a in alternatives if a["name"].strip() == chosen_label), None)
+        compatible = entry["backwards_compatible"] if entry is not None else None
+    justification = args.get("complexity_justification")
+    if compatible is False and not (isinstance(justification, str) and justification.strip()):
+        problems.append("complexity_justification (required when the chosen alternative is not backwards compatible)")
     if not isinstance(args.get("reasoning"), str):
         problems.append("reasoning")
     return problems + _carry_problem(args)
@@ -141,19 +222,42 @@ class ScoutMode:
             return dict(args)
         qid = args["question_id"]
         question = next(q.question for q in state.questions if q.id == qid)
-        alternatives = [S.Alternative.model_validate(a) for a in args["alternatives"]]
+        # Built from the four fields only, so an extra key the model adds is dropped rather than bounced (section 5).
+        # Names are stored stripped, as the checks compare them.
+        alternatives = [
+            S.Alternative(
+                name=a["name"].strip(),
+                case_for=a["case_for"],
+                case_against=a["case_against"],
+                backwards_compatible=a["backwards_compatible"],
+            )
+            for a in args["alternatives"]
+        ]
+        decision = args["decision"].strip()
+        options = dict(state.ask_options or {})  # phase 5b section 6: the labels and text the navigator was shown
+        other = None
+        if decision == "Other":
+            o = args["other"]
+            other = S.OtherAnswer(
+                summary=o["summary"],
+                case_for=o["case_for"],
+                case_against=o["case_against"],
+                backwards_compatible=o["backwards_compatible"],
+            )
         S.settle_question(
             state,
             S.SettledAnswer(
                 question_id=qid,
                 question=question,
                 alternatives=alternatives,
-                decision=args["decision"],
+                decision=decision,
                 reasoning=args["reasoning"],
                 complexity_justification=args.get("complexity_justification") or None,
+                options=options,
+                other=other,
             ),
         )
-        return {**args, "next_question_id": S.current_question_id(state)}
+        return {**args, "next_question_id": S.current_question_id(state), "options": options}
 
     def carry_forward(self, args: dict) -> list[str]:
         return list(args["carry_forward"])

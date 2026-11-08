@@ -168,7 +168,7 @@ async def test_10_settle_with_one_alternative_is_bounced_naming_alternatives():
     fake = FakeOllama([_settle("q1", alternatives=[_alts()[0]]), _settle("q1")])
     out = await ask(st, _ask("settle"), runtime(fake, SCOUT))
     assert isinstance(out, Answered)
-    assert "alternatives" in _tool_text(fake.requests[1])
+    assert "alternatives (missing options: B)" in _tool_text(fake.requests[1])
 
 
 # 11
@@ -178,7 +178,7 @@ async def test_11_decision_matching_no_alternative_is_bounced_naming_decision():
     fake = FakeOllama([_settle("q1", decision="Postgres"), _settle("q1")])
     out = await ask(st, _ask("settle"), runtime(fake, SCOUT))
     assert isinstance(out, Answered)
-    assert "decision" in _tool_text(fake.requests[1])
+    assert "decision (must be one of: A, B, Other; got 'Postgres')" in _tool_text(fake.requests[1])
 
 
 # 12
