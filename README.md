@@ -39,6 +39,11 @@ claude plugin install navigator@navigator --scope user
 - `/navigator:scout [effort]` agrees a question list from the resolved tickets in `.scratch/<effort>/issues/`, or from the
   decisions you confirmed in this conversation when there are none, then settles each question in turn and ends with an
   Approve / Reject / Other prompt. It replaces `scout-ahead`.
+- Subagents can run the same workflows through `navigator:pair-driver` and `navigator:scout-driver`. Each reads its skill's
+  `SKILL.md`, so the steps stay in one place. Both skills stay user-only (`disable-model-invocation: true`), so the main
+  session does not start them on its own. A subagent cannot ask the user, so when it needs an answer it ends with a
+  `Needs user:` message. The parent asks the user and continues the subagent with SendMessage. The scout driver also
+  takes the parent's confirmed decisions from its prompt, since it cannot see the parent conversation.
 
 ## Configuration
 
@@ -72,7 +77,7 @@ Compression is off by default. Turning it on requires the `compression` extra (s
 ```
 cd server
 uv sync                  # base dependencies
-uv run pytest            # 345 tests; the real-model test is skipped without the compression extra
+uv run pytest            # 355 tests; the real-model test is skipped without the compression extra
 uv sync --extra compression   # optional: llmlingua, torch and the model, for the real-model test
 ```
 
