@@ -283,6 +283,18 @@ def test_skill_frontmatter_matches_the_phase_doc():
     assert "allowed-tools: mcp__plugin_navigator_navigator__*" in text
 
 
+def test_scout_skill_reads_resolved_tickets_then_the_conversation():
+    text = SKILL.read_text()
+    rules = (SKILL.parent / "tickets.md").read_text()
+    assert "tickets.md" in text
+    assert "this conversation" in text
+    assert "Status: resolved" in rules
+    assert "## Answer" in rules
+    for doc in (text, rules):
+        assert "closed ticket" not in doc
+        assert "resolution comment" not in doc
+
+
 # Fix plan section 6: the skill quotes the exact payload key lines that the server accepts and describes.
 def test_scout_skill_quotes_each_record_kinds_keys():
     text = SKILL.read_text()

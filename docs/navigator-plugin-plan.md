@@ -372,7 +372,7 @@ Both skill bodies tell Claude to:
 
 ### `scout` (replaces scout-ahead)
 
-- Build the context from the closed tickets' resolution comments.
+- Build the context from the resolved tickets in `.scratch/<effort>/issues/` (from each `## Answer` to the end of the file), or from the decisions confirmed in this conversation when there are none.
 - Agree the question list first, then settle one question per turn.
 - Each settled answer gives the alternatives with the strongest case for and against each, the decision, and the
   reasoning. Prefer the simplest backwards-compatible option.
