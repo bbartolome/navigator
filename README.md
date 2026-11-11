@@ -36,7 +36,8 @@ claude plugin install navigator@navigator --scope user
 
 - `/navigator:pair <task>` pairs on a task. The navigator sets the plan and settles questions while Claude implements,
   runs the navigator's tool calls and checks its claims. It replaces `to-llm`.
-- `/navigator:scout` agrees a question list from closed tickets, then settles each question in turn and ends with an
+- `/navigator:scout [effort]` agrees a question list from the resolved tickets in `.scratch/<effort>/issues/`, or from the
+  decisions you confirmed in this conversation when there are none, then settles each question in turn and ends with an
   Approve / Reject / Other prompt. It replaces `scout-ahead`.
 
 ## Configuration
@@ -71,7 +72,7 @@ Compression is off by default. Turning it on requires the `compression` extra (s
 ```
 cd server
 uv sync                  # base dependencies
-uv run pytest            # 231 tests; the real-model test is skipped without the compression extra
+uv run pytest            # 345 tests; the real-model test is skipped without the compression extra
 uv sync --extra compression   # optional: llmlingua, torch and the model, for the real-model test
 ```
 
