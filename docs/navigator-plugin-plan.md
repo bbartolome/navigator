@@ -344,12 +344,8 @@ A pydantic `SessionState` holds:
 
 ## 9. Skills
 
-Both skills use the same frontmatter base:
-
-```yaml
-disable-model-invocation: true
-allowed-tools: mcp__plugin_navigator_navigator__*
-```
+Scout is user-only, so its frontmatter sets `disable-model-invocation: true`. Pair leaves it out, so the model can start
+pair too. Both set `allowed-tools: mcp__plugin_navigator_navigator__*`; scout also lists `Read, Glob`.
 
 Both skill bodies tell Claude to:
 - Route every plan, decision, failure or scope question through the `navigator_*` tools.

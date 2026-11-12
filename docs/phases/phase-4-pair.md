@@ -143,13 +143,12 @@ Main doc §2 facts (tool names `mcp__plugin_navigator_navigator__*`, `allowed-to
 
 ## 5. `skills/pair/SKILL.md` (full proposed text)
 
-Frontmatter per main doc §9. `description` is the to-llm description.
+Frontmatter per main doc §9. `description` is the to-llm description plus a model-invocation trigger.
 
 ````markdown
 ---
 name: pair
-description: Pair with a local Ollama navigator that sets the plan and settles your questions while you implement, supply context, run its tool calls and challenge its claims. Use for navigator/driver pairing.
-disable-model-invocation: true
+description: Pair with a local Ollama navigator that sets the plan and settles your questions while you implement, supply context, run its tool calls and challenge its claims. Use only when the user, or a parent agent's prompt, asks to pair with the navigator.
 allowed-tools: mcp__plugin_navigator_navigator__*
 ---
 
@@ -212,8 +211,9 @@ Against the phase 3 fake Ollama where a loop is needed.
 | 16 | Fake Ollama replies to `decide` with missing `decision`, then a valid call | first reply returned to navigator as a tool result naming `decision`; final outcome `answered` |
 | 17 | Fake Ollama replies with `set_plan` when `decide` was asked | handled as a malformed reply per phase 3 |
 | 18 | `need_info` reply | outcome `need_info`, not `answered` |
-| 19 | Frontmatter of `skills/pair/SKILL.md` parsed as YAML | `disable-model-invocation is True`; `allowed-tools == "mcp__plugin_navigator_navigator__*"`; `name == "pair"`; body contains `navigator_ask`, `navigator_submit`, `navigator_record`, `WebSearch`, `AskUserQuestion`, `Playwright`, and not `curl` outside the "Never curl" sentence |
+| 19 | Frontmatter of `skills/pair/SKILL.md` parsed as YAML | `disable-model-invocation` absent; `allowed-tools == "mcp__plugin_navigator_navigator__*"`; `name == "pair"`; body contains `navigator_ask`, `navigator_submit`, `navigator_record`, `WebSearch`, `AskUserQuestion`, `Playwright`, and not `curl` outside the "Never curl" sentence |
 | 20 | `claude plugin validate .` | exit 0 |
+| 21 | `test_pair_skill_has_model_trigger_and_subagent_fallback` | `description` contains `Use only when`; body contains `Needs user:`, `SendMessage`, `ToolSearch`, `in the foreground`, `timeout 600000`, `Do not cancel it`, `one-line outcome` |
 
 ## 7. End-to-end manual check
 
@@ -251,4 +251,4 @@ Against the phase 3 fake Ollama where a loop is needed.
 5. Should the skill use `$ARGUMENTS` as the goal, or ask the user when none is given? The `/navigator:pair` argument behaviour in a plugin skill was not tested.
 6. (main doc §11) Is the append-only tool-round layout acceptable in place of to-llm's per-send summary rewrite? It affects what the navigator sees on tool rounds.
 7. The to-llm text does not give the parameters of `read_file`, `list_dir`, `grep`, the item types of `steps`, or the finding key names. Are the proposed ones in §2.2 acceptable?
-8. How is `AskUserQuestion` reached when a skill runs inside a subagent or non-interactive session? Not checked.
+8. Answered. `AskUserQuestion` is unavailable in subagents spawned through the Agent tool (Agent SDK user-input docs, Limitations; see phase 5 §10). The pair skill tells a subagent to end its turn with a `Needs user:` message instead. The parent asks the user and continues the subagent with SendMessage.
