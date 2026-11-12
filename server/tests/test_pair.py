@@ -187,13 +187,20 @@ def _frontmatter() -> tuple[dict, str]:
 
 def test_19_skill_frontmatter_and_body():
     meta, body = _frontmatter()
-    assert meta["disable-model-invocation"] is True
+    assert "disable-model-invocation" not in meta
     assert meta["allowed-tools"] == "mcp__plugin_navigator_navigator__*"
     assert meta["name"] == "pair"
     for needle in ["navigator_ask", "navigator_submit", "navigator_record", "WebSearch", "AskUserQuestion", "Playwright"]:
         assert needle in body, needle
     outside = body.replace("Never curl Ollama", "")
     assert "curl" not in outside
+
+
+def test_pair_skill_has_model_trigger_and_subagent_fallback():
+    meta, body = _frontmatter()
+    assert "Use only when" in meta["description"]
+    for needle in ["Needs user:", "SendMessage", "ToolSearch", "in the foreground", "timeout 600000", "Do not cancel it", "one-line outcome"]:
+        assert needle in body, needle
 
 
 # Fix plan section 6: the skill quotes the exact payload key lines that the server accepts and describes.

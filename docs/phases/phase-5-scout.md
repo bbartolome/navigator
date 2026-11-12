@@ -184,7 +184,7 @@ Frontmatter per main doc §9. `name` replaces the directory name in the command,
 name: scout
 description: Pair with a local Ollama navigator to settle the questions of a grilling session one at a time, with justified tool calls and a bias toward simple, backwards-compatible options. Use for navigator/driver scouting.
 disable-model-invocation: true
-allowed-tools: mcp__plugin_navigator_navigator__*
+allowed-tools: mcp__plugin_navigator_navigator__*, Read, Glob
 ---
 
 You are the driver. The navigator is a local model reached only through the `navigator_*` MCP tools. Never curl
