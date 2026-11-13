@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from fakes import FakeOllama, call, runtime
 from navigator_mcp import session as S
@@ -279,8 +280,21 @@ def test_18_claude_plugin_validate_passes_with_the_scout_skill():
 def test_skill_frontmatter_matches_the_phase_doc():
     text = SKILL.read_text()
     assert text.startswith("---\nname: scout\n")
-    assert "disable-model-invocation: true" in text
-    assert "allowed-tools: mcp__plugin_navigator_navigator__*" in text
+    meta = yaml.safe_load(text[4:].split("\n---\n", 1)[0])
+    assert meta["disable-model-invocation"] is True
+    assert meta["allowed-tools"] == "mcp__plugin_navigator_navigator__*, Read, Glob"
+
+
+def test_scout_skill_reads_resolved_tickets_then_the_conversation():
+    text = SKILL.read_text()
+    rules = (SKILL.parent / "tickets.md").read_text()
+    assert "tickets.md" in text
+    assert "this conversation" in text
+    assert "Status: resolved" in rules
+    assert "## Answer" in rules
+    for doc in (text, rules):
+        assert "closed ticket" not in doc
+        assert "resolution comment" not in doc
 
 
 # Fix plan section 6: the skill quotes the exact payload key lines that the server accepts and describes.

@@ -184,7 +184,7 @@ Frontmatter per main doc §9. `name` replaces the directory name in the command,
 name: scout
 description: Pair with a local Ollama navigator to settle the questions of a grilling session one at a time, with justified tool calls and a bias toward simple, backwards-compatible options. Use for navigator/driver scouting.
 disable-model-invocation: true
-allowed-tools: mcp__plugin_navigator_navigator__*
+allowed-tools: mcp__plugin_navigator_navigator__*, Read, Glob
 ---
 
 You are the driver. The navigator is a local model reached only through the `navigator_*` MCP tools. Never curl
@@ -198,8 +198,11 @@ call `navigator_status` in a loop.
   exited.
 - Only one job runs per server; on a `job <id> active` error, wait for that job's result.
 
-1. Build the context. For each closed ticket of the grilling session, read its resolution comment in full, not the
-   map's one-line gist. Put each ticket id and its full comment in the `context` argument. Call
+1. Build the context from resolved tickets or from this conversation. The effort is in `$ARGUMENTS`, as a slug or a
+   `.scratch/<slug>` path. Read each ticket in `.scratch/<effort>/issues/` whose `Status:` line starts with
+   `Status: resolved`, whatever its `Type:`. Put its path, title, Status line, and everything from `## Answer` to the end
+   of the file in `context`. If no ticket matches, use the decisions the user confirmed in this conversation, labelled as
+   not recorded on disk. If neither exists, ask for the effort, or stop and point at `/grill-me`. Call
    `navigator_start` with `mode="scout"`, a `goal`, and that `context`.
 
 2. Agree the question list. Call `navigator_ask` with a neutral question asking which questions this session must
@@ -252,14 +255,20 @@ call `navigator_status` in a loop.
 Point 8 calls `navigator_end` before the user answers, so a post-Other challenge cannot reach the same session. Open
 question 6.
 
-## 7. Context from closed tickets
+## 7. Context sources
 
-- Input per ticket: ticket id, title, and the full text of its resolution comment (the last comment that records the
-  outcome). Not a one-line gist.
-- Claude reads the comments and passes them in `navigator_start.context`; the server stores `context` unmodified in
-  `SessionState` (phase 2) and renders it under its own heading in the stable block (§9a, grow-only).
-- The server does not fetch tickets; it has no tracker access (main doc §1 non-goals and §5). Which tool Claude uses to
-  read tickets is open question 1.
+- Source 1, resolved tickets on disk. Per ticket: its path, its `# ` title, its whole `Status:` line, and everything from
+  `## Answer` to the end of the file, including later `## Revision` and `## Comments` sections. Not a one-line gist. A
+  qualified status, such as `resolved (not yet confirmed ...)`, counts, and scout names it to the user.
+- Source 2, this conversation. The decisions the user confirmed, with their reasoning, labelled "from this conversation,
+  not recorded on disk". Unconfirmed recommendations are excluded. This source is not durable: nothing under `.scratch/`
+  records it.
+- Priority: source 1 when an effort is given and it has resolved tickets. Otherwise source 2. If neither exists, scout
+  asks for the effort, or stops before `navigator_start` and points at `/grill-me`.
+- Claude reads the files with Read and Glob and passes the text in `navigator_start.context`. The server stores
+  `context` unmodified in `SessionState` (phase 2) and renders it under its own heading in the stable block (§9a,
+  grow-only).
+- The server does not fetch tickets; it has no tracker access (main doc §1 non-goals and §5).
 
 ## 8. Tests (`server/tests/test_scout.py`, fake Ollama from phase 3)
 
@@ -304,9 +313,10 @@ question 6.
 
 ## 11. Open questions
 
-1. Which tool or CLI does Claude use to read the closed tickets' resolution comments, and where do the grilling
-   session's ticket ids come from (skill argument, or a map file)? The scout-ahead source names tickets and a "map" but
-   no tracker.
+1. Answered. Claude reads ticket files with Read and Glob, at the paths given in `issue-tracker-local.md:17-19`. The effort
+   is optional. It comes from the scout arguments, as a slug or a `.scratch/<slug>` path. Glob lists `.scratch/*/issues/`
+   only when scout must ask for an effort. Otherwise scout uses this conversation's confirmed decisions, which need no
+   tool. Questions 2 to 6 stay open.
 2. Does the Claude Code CLI add an "Other" choice to AskUserQuestion by itself? If it does, the skill's explicit third
    option duplicates it, and the option list should be Approve / Reject only.
 3. Main doc §9a lists the step list under per-question fields. Should the scout question list render in the grow-only
